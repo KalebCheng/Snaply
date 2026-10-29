@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(target_os = "macos")]
 use crate::settings;
 #[cfg(target_os = "macos")]
 use crate::settings::DockVisibility;

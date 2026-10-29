@@ -59,8 +59,12 @@ jobs:
             os: macos-latest
           - name: Windows x64
             os: windows-latest
+          - name: Windows ARM64
+            os: windows-11-arm
           - name: Linux x64
             os: ubuntu-22.04
+          - name: Linux ARM64
+            os: ubuntu-22.04-arm
 
     steps:
       - name: Check out repository
