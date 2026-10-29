@@ -1,4 +1,5 @@
 import type { AppInfo, UpdateInfo } from "../types";
+import { version as appVersion } from "../../package.json";
 import type { SettingsCopy } from "./i18n";
 import { formatMessage } from "./i18n";
 import {
@@ -24,7 +25,7 @@ type Props = {
 
 export function AboutSection(props: Props) {
   const { copy, info, update, updateState } = props;
-  const version = info?.version ?? update?.currentVersion ?? "0.1.0";
+  const version = info?.version ?? update?.currentVersion ?? appVersion;
   const checking = updateState === "checking";
   const hasUpdate = updateState === "ready" && update?.hasUpdate === true;
   const readyWithoutRelease = updateState === "ready" && update != null && update.latestVersion == null;

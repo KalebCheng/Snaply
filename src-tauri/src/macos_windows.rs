@@ -36,6 +36,13 @@ const CONTENT_EDGE_SNAP_RATIO: f64 = 0.01;
 const CONTENT_EDGE_SNAP_MIN: f64 = 4.0;
 const CONTENT_EDGE_SNAP_MAX: f64 = 16.0;
 
+/// Electron 根窗口通常会用一圈透明画布承载真正的内容。只有至少三侧
+/// 存在明显透明边距时才采用内容边界；普通原生窗口的圆角或单侧材质缺口
+/// 不应改变 CoreGraphics 给出的真实窗口位置。
+const TRANSPARENT_MARGIN_MIN: f64 = 16.0;
+const TRANSPARENT_MARGIN_SIDES: usize = 3;
+const TRANSPARENT_CONTENT_RATIO: f64 = 0.92;
+
 #[derive(Clone, Copy, Debug)]
 struct GlobalRect {
     x: f64,
@@ -401,6 +408,38 @@ fn snap_content_edges(bounds: GlobalRect, mut content: GlobalRect) -> GlobalRect
     content
 }
 
+/// 决定使用原始窗口边界还是 Alpha 内容边界。
+///
+/// macOS 原生窗口的 `kCGWindowBounds` 已经是用户看到的窗口外框。窗口截图
+/// 中的圆角、阴影或材质抗锯齿可能让单侧 Alpha 提前消失，若直接采用内容
+/// 边界会把整个窗口向左或向右缩进。透明根窗口则相反，原始边界接近整块
+/// 显示器而内容只占其中一部分，此时才需要使用内容边界。
+fn window_bounds_for_hit(raw: GlobalRect, content: Option<GlobalRect>) -> GlobalRect {
+    let Some(content) = content else {
+        return raw;
+    };
+    if !content.intersects(raw) {
+        return raw;
+    }
+
+    let left = (content.x - raw.x).max(0.0);
+    let top = (content.y - raw.y).max(0.0);
+    let right = (raw.x + raw.width - content.x - content.width).max(0.0);
+    let bottom = (raw.y + raw.height - content.y - content.height).max(0.0);
+    let substantial_margins = [left, top, right, bottom]
+        .into_iter()
+        .filter(|margin| *margin >= TRANSPARENT_MARGIN_MIN)
+        .count();
+    let content_ratio = (content.width * content.height) / (raw.width * raw.height).max(1.0);
+
+    if substantial_margins >= TRANSPARENT_MARGIN_SIDES && content_ratio <= TRANSPARENT_CONTENT_RATIO
+    {
+        content
+    } else {
+        raw
+    }
+}
+
 fn opaque_bounds(
     rgba: &[u8],
     width: usize,
@@ -483,7 +522,7 @@ pub fn windows_at_point(monitor: &MonitorGeom, cx: f64, cy: f64) -> Vec<WindowHi
         if !raw.bounds.contains(global_x, global_y) {
             continue;
         }
-        let content = content_bounds(&raw).unwrap_or(raw.bounds);
+        let content = window_bounds_for_hit(raw.bounds, content_bounds(&raw));
         candidates.push(ResolvedWindow {
             hit: resolve_window(&raw, content, monitor),
             contains_pointer: content.contains(global_x, global_y),
@@ -634,5 +673,48 @@ mod tests {
         assert_eq!(snapped.width, bounds.width);
         assert_eq!(snapped.y, bounds.y);
         assert_eq!(snapped.height, bounds.height);
+    }
+
+    #[test]
+    fn native_window_keeps_raw_bounds_when_one_side_is_trimmed() {
+        let bounds = GlobalRect {
+            x: 186.0,
+            y: 326.0,
+            width: 753.0,
+            height: 665.0,
+        };
+        let content = GlobalRect {
+            x: 198.0,
+            y: 326.0,
+            width: 741.0,
+            height: 665.0,
+        };
+
+        assert_rect_eq(window_bounds_for_hit(bounds, Some(content)), bounds);
+    }
+
+    #[test]
+    fn transparent_root_window_uses_visible_content_bounds() {
+        let bounds = GlobalRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1800.0,
+            height: 1169.0,
+        };
+        let content = GlobalRect {
+            x: 260.0,
+            y: 120.0,
+            width: 1280.0,
+            height: 820.0,
+        };
+
+        assert_rect_eq(window_bounds_for_hit(bounds, Some(content)), content);
+    }
+
+    fn assert_rect_eq(actual: GlobalRect, expected: GlobalRect) {
+        assert_eq!(actual.x, expected.x);
+        assert_eq!(actual.y, expected.y);
+        assert_eq!(actual.width, expected.width);
+        assert_eq!(actual.height, expected.height);
     }
 }

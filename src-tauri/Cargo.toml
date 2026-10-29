@@ -1,6 +1,6 @@
 [package]
 name = "snaply"
-version = "0.1.1"
+version = "0.1.2"
 description = "Snaply - cross-platform screenshot & annotation tool"
 authors = ["Snaply"]
 license = "MIT"

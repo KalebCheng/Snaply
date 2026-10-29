@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api, isTauri } from "../lib/ipc";
 import type { AppInfo, Language, Settings, SettingsPayload, UpdateInfo } from "../types";
+import { version as appVersion } from "../../package.json";
 import { AboutSection, type UpdateState } from "./AboutSection";
 import { GeneralSection } from "./GeneralSection";
 import { translations } from "./i18n";
@@ -22,6 +23,14 @@ const fallbackPayload: SettingsPayload = {
   defaultSaveDir: "",
   effectiveShortcut: defaultSettings.shortcut,
 };
+
+function normalizeSettings(settings: Partial<Settings> | null | undefined): Settings {
+  return {
+    ...defaultSettings,
+    ...settings,
+    dockVisibility: settings?.dockVisibility ?? defaultSettings.dockVisibility,
+  };
+}
 
 export function SettingsWindow() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
@@ -47,7 +56,7 @@ export function SettingsWindow() {
       });
       setDraft(defaultSettings);
       setInfo({
-        version: "0.1.0",
+        version: appVersion,
         shortcut: defaultSettings.shortcut,
         screenPermission: true,
         platform: /Mac|iPhone|iPad/.test(navigator.userAgent) ? "darwin" : "browser",
@@ -56,8 +65,9 @@ export function SettingsWindow() {
     }
 
     const next = await api.getSettings();
-    setPayload(next);
-    setDraft(next.settings);
+    const normalized = { ...next, settings: normalizeSettings(next.settings) };
+    setPayload(normalized);
+    setDraft(normalized.settings);
     void api.appInfo().then(setInfo).catch(() => undefined);
   }, []);
 
@@ -71,7 +81,7 @@ export function SettingsWindow() {
   const checkUpdates = useCallback(async () => {
     setUpdateState("checking");
     if (!isTauri()) {
-      setUpdate({ currentVersion: "0.1.0", latestVersion: null, hasUpdate: false, releaseUrl: null, downloadUrl: null, publishedAt: null, notes: null });
+      setUpdate({ currentVersion: appVersion, latestVersion: null, hasUpdate: false, releaseUrl: null, downloadUrl: null, publishedAt: null, notes: null });
       setUpdateState("ready");
       return;
     }

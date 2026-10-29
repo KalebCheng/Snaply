@@ -67,7 +67,6 @@ pub fn _monitor_geoms(app: AppHandle) -> Vec<MonitorGeom> {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPayload {
-    #[serde(flatten)]
     settings: Settings,
     default_save_dir: String,
     effective_shortcut: String,
@@ -151,4 +150,44 @@ pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(url, None::<String>)
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{DockVisibility, Language};
+
+    #[test]
+    fn settings_payload_keeps_settings_nested() {
+        let payload = SettingsPayload {
+            settings: Settings::default(),
+            default_save_dir: "/tmp/Snaply".into(),
+            effective_shortcut: settings::DEFAULT_SHORTCUT.into(),
+        };
+        let value = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(value["settings"]["language"], "zh-CN");
+        assert_eq!(value["settings"]["dockVisibility"], "followWindow");
+        assert_eq!(value["defaultSaveDir"], "/tmp/Snaply");
+        assert_eq!(value["effectiveShortcut"], settings::DEFAULT_SHORTCUT);
+        assert!(value.get("shortcut").is_none());
+    }
+
+    #[test]
+    fn settings_payload_round_trips_supported_values() {
+        let payload = SettingsPayload {
+            settings: Settings {
+                language: Language::English,
+                dock_visibility: DockVisibility::Hide,
+                ..Settings::default()
+            },
+            default_save_dir: String::new(),
+            effective_shortcut: settings::DEFAULT_SHORTCUT.into(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+
+        assert!(json.contains(r#""settings":{"#));
+        assert!(json.contains(r#""language":"en""#));
+        assert!(json.contains(r#""dockVisibility":"hide""#));
+    }
 }
