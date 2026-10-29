@@ -47,6 +47,7 @@ pub struct AppState {
     /// Explicit quit requests bypass the tray application exit guard.
     pub allow_exit: AtomicBool,
     /// Last Dock visibility applied on macOS.
+    #[cfg(target_os = "macos")]
     pub dock_visible: AtomicBool,
 }
 
@@ -59,6 +60,7 @@ impl AppState {
             pending: Mutex::new(PendingCapture::new()),
             last_edit_path: Mutex::new(None),
             allow_exit: AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
             dock_visible: AtomicBool::new(false),
         }
     }

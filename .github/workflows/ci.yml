@@ -16,19 +16,19 @@ permissions:
 jobs:
   frontend:
     name: Build frontend
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -40,7 +40,7 @@ jobs:
         run: pnpm build
 
       - name: Upload frontend build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: dist
@@ -59,12 +59,16 @@ jobs:
             os: macos-latest
           - name: Windows x64
             os: windows-latest
+          - name: Windows ARM64
+            os: windows-11-arm
           - name: Linux x64
-            os: ubuntu-22.04
+            os: ubuntu-24.04
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -74,7 +78,8 @@ jobs:
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
             libx11-dev libxcb1-dev libdbus-1-dev libpipewire-0.3-dev \
-            libwayland-dev patchelf
+            libspa-0.2-dev libgbm-dev libdrm-dev libegl1-mesa-dev \
+            libxkbcommon-dev libwayland-dev patchelf
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -88,7 +93,7 @@ jobs:
           key: ${{ matrix.name }}
 
       - name: Download frontend build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: dist

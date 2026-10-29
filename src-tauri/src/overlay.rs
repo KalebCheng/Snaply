@@ -205,8 +205,7 @@ fn to_info(m: &Monitor, geoms: &[MonitorGeom], index: usize) -> MonitorInfo {
     MonitorInfo {
         id: m.id().unwrap_or(index as u32),
         name: m
-            .friendly_name()
-            .or_else(|_| m.name())
+            .name()
             .unwrap_or_else(|_| format!("Display {}", index + 1)),
         x: m.x().unwrap_or(0),
         y: m.y().unwrap_or(0),
@@ -246,7 +245,7 @@ fn capture_frames() -> Result<CapturedFrames, String> {
         let img = m.capture_image().map_err(|e| {
             format!(
                 "无法抓取显示器「{}」：{}",
-                m.friendly_name().unwrap_or_default(),
+                m.name().unwrap_or_default(),
                 platform::describe_capture_error(e)
             )
         })?;

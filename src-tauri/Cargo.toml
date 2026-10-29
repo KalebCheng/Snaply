@@ -25,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-xcap = "0.9.6"
+xcap = "=0.8.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
 env_logger = "0.11"
