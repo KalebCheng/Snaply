@@ -15,8 +15,8 @@ Download the latest installer from [GitHub Releases](https://github.com/KalebChe
 | Platform | Packages |
 | --- | --- |
 | macOS 10.13+ | `.dmg` for Apple Silicon and Intel |
-| Windows 10+ | `.exe` (NSIS) and `.msi` |
-| Linux | `.AppImage`, `.deb`, and `.rpm` |
+| Windows 10+ | NSIS `.exe` for x64 / ARM64; `.msi` for x64 |
+| Linux | `.AppImage`, `.deb`, and `.rpm` for x64 / ARM64 |
 
 > macOS requires Screen Recording permission. Enable Snaply in **System Settings → Privacy & Security → Screen Recording**, then restart the app.
 
@@ -115,7 +115,7 @@ Annotations are stored as objects over an immutable base capture. Undo is a stat
 | Screen capture | Screen Recording permission | Yes | X11 / XWayland |
 | Window detection | Native z-order | Geometric hit testing | Window-manager dependent |
 | Global shortcut | Yes | Yes | May be unavailable on Wayland; tray works |
-| Release bundles | `.dmg` (arm64, x64) | `.msi`, NSIS `.exe` | `.AppImage`, `.deb`, `.rpm` |
+| Release bundles | `.dmg` (arm64, x64) | NSIS `.exe` (arm64, x64), `.msi` (x64) | `.AppImage`, `.deb`, `.rpm` (arm64, x64) |
 
 Pure Wayland sessions cannot be captured directly due to an `xcap` limitation. Snaply reports a clear error and asks you to use X11 or XWayland.
 

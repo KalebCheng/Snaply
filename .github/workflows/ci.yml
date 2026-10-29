@@ -14,13 +14,53 @@ permissions:
   contents: read
 
 jobs:
+  frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
   checks:
-    name: Check (${{ matrix.os }})
+    name: Check (${{ matrix.name }})
+    needs: frontend
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-22.04]
+        include:
+          - name: macOS
+            os: macos-latest
+          - name: Windows x64
+            os: windows-latest
+          - name: Linux x64
+            os: ubuntu-22.04
 
     steps:
       - name: Check out repository
@@ -45,23 +85,13 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.name }}
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
         with:
-          version: 10
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        run: pnpm build
+          name: frontend-dist
+          path: dist
 
       - name: Check Rust formatting
         working-directory: src-tauri

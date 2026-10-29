@@ -128,9 +128,45 @@ jobs:
 
           gh release create "$TAG" "${args[@]}"
 
+  frontend:
+    name: Build frontend
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     name: Build ${{ matrix.name }}
-    needs: [validate, create-release]
+    needs: [validate, create-release, frontend]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -140,22 +176,38 @@ jobs:
             os: macos-latest
             platform: macos
             arch: arm64
-            args: --target aarch64-apple-darwin --bundles dmg
+            target: aarch64-apple-darwin
+            bundles: dmg
           - name: macOS Intel
             os: macos-latest
             platform: macos
             arch: x64
-            args: --target x86_64-apple-darwin --bundles dmg
+            target: x86_64-apple-darwin
+            bundles: dmg
           - name: Windows x64
             os: windows-latest
             platform: windows
             arch: x64
-            args: --bundles nsis,msi
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: Windows ARM64
+            os: windows-11-arm
+            platform: windows
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
           - name: Linux x64
             os: ubuntu-22.04
             platform: linux
             arch: x64
-            args: --bundles appimage,deb,rpm
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb,rpm
+          - name: Linux ARM64
+            os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+            bundles: appimage,deb,rpm
 
     steps:
       - name: Check out repository
@@ -176,7 +228,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ startsWith(matrix.name, 'macOS') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
@@ -198,6 +250,12 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
       - name: Build and upload installers
         uses: tauri-apps/tauri-action@v1
         env:
@@ -209,7 +267,7 @@ jobs:
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           generateReleaseNotes: false
           releaseAssetNamePattern: Snaply_[version]_${{ matrix.platform }}_${{ matrix.arch }}_[bundle][ext]
-          args: ${{ matrix.args }}
+          args: --config src-tauri/tauri.ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
   publish:
     name: Publish release

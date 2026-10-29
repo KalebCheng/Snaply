@@ -297,7 +297,7 @@ fn begin_inner(app: &AppHandle) -> Result<(), String> {
         let label = format!("{OVERLAY_PREFIX}{generation}-{}", m.id);
         let url = WebviewUrl::App(format!("overlay.html?m={}", m.id).into());
         let should_focus = Some(m.id) == focused_id;
-        let mut builder = WebviewWindowBuilder::new(app, &label, url)
+        let builder = WebviewWindowBuilder::new(app, &label, url)
             .title("Snaply")
             .inner_size(m.width.max(1) as f64, m.height.max(1) as f64)
             .position(m.x as f64, m.y as f64)
@@ -311,11 +311,10 @@ fn begin_inner(app: &AppHandle) -> Result<(), String> {
             .focused(should_focus)
             .accept_first_mouse(true)
             .background_color(tauri::window::Color(0, 0, 0, 0));
-        if cfg!(target_os = "macos") {
-            builder = builder
-                .title_bar_style(tauri::TitleBarStyle::Transparent)
-                .hidden_title(true);
-        }
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Transparent)
+            .hidden_title(true);
         let window = builder.build().map_err(|e| e.to_string())?;
         configure_overlay_window(&window, m);
         let _ = window.show();

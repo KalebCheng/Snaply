@@ -1,6 +1,9 @@
-use tauri::{AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::settings::{self, DockVisibility};
+use crate::settings;
+#[cfg(target_os = "macos")]
+use crate::settings::DockVisibility;
+#[cfg(target_os = "macos")]
 use crate::state::AppState;
 use crate::tray;
 
@@ -15,7 +18,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
         let _ = refresh_dock_visibility(app);
         return Ok(());
     }
-    let mut builder =
+    let builder =
         WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
             .title("Snaply Settings")
             .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -25,13 +28,17 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
             .transparent(true)
             .decorations(true)
             .shadow(true)
-            .hidden_title(true)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .traffic_light_position(LogicalPosition::new(18.0, 20.0))
             .background_color(tauri::window::Color(0, 0, 0, 0));
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon)?;
-    }
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .hidden_title(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .traffic_light_position(tauri::LogicalPosition::new(18.0, 20.0));
+    let builder = if let Some(icon) = app.default_window_icon().cloned() {
+        builder.icon(icon)?
+    } else {
+        builder
+    };
     let window = builder.build()?;
     #[cfg(target_os = "macos")]
     {
