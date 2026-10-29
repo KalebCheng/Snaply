@@ -20,7 +20,14 @@ Download the latest installer from [GitHub Releases](https://github.com/KalebChe
 
 > macOS requires Screen Recording permission. Enable Snaply in **System Settings → Privacy & Security → Screen Recording**, then restart the app.
 
-Current community builds are unsigned. macOS may require **Open Anyway**, and Windows SmartScreen may show a warning.
+Community builds use ad-hoc signing but are not notarized. On macOS, right-click the app and choose **Open** on first launch. If macOS reports that the app is damaged, clear quarantine after copying it to Applications:
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Snaply.app
+open /Applications/Snaply.app
+```
+
+Windows SmartScreen may also show a warning for community builds.
 
 ## Features
 

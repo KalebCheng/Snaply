@@ -267,7 +267,7 @@ jobs:
           releaseDraft: true
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           generateReleaseNotes: false
-          releaseAssetNamePattern: Snaply_[version]_${{ matrix.platform }}_${{ matrix.arch }}_[bundle][ext]
+          releaseAssetNamePattern: Snaply_[version]_${{ matrix.platform }}_${{ matrix.arch }}[ext]
           args: --config src-tauri/tauri.ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
   publish:
