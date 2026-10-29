@@ -1,0 +1,708 @@
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.ov-canvas,
+.ov-art {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* The selected region becomes the annotation workspace. */
+.ov-selection.is-editing {
+  box-shadow: 0 0 0 1.5px var(--canvas-line);
+}
+
+.ov-shade {
+  position: absolute;
+  background: var(--canvas-dim);
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.ov-shade.is-empty {
+  inset: 0;
+  background: rgba(9, 10, 13, 0.22);
+}
+
+.ov-input {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+
+/* Selection */
+.ov-selection {
+  position: absolute;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1.5px var(--canvas-line),
+    0 0 0 100vmax rgba(0, 0, 0, 0);
+  border-radius: 1px;
+}
+
+.ov-size {
+  position: absolute;
+  left: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--canvas-fg);
+  background: var(--canvas-surface);
+  box-shadow: var(--inset-hairline);
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  white-space: nowrap;
+}
+
+.ov-handle {
+  position: absolute;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 1.5px var(--canvas-line),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: handle-in 140ms var(--ease-out);
+}
+
+@keyframes handle-in {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
+
+/* Hovered window preview */
+.ov-preset {
+  position: absolute;
+  pointer-events: none;
+  /* Solid frame and glow indicate the full capture region. */
+  box-shadow:
+    inset 0 0 0 2px var(--canvas-line),
+    0 0 0 1px rgba(59, 130, 246, 0.55),
+    0 0 18px 2px rgba(59, 130, 246, 0.45),
+    inset 0 0 24px 0 rgba(59, 130, 246, 0.12);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.ov-preset-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 0 solid #fff;
+  filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.9));
+}
+
+.ov-preset-corner.tl { left: -2px; top: -2px; border-left-width: 3px; border-top-width: 3px; border-top-left-radius: 4px; }
+.ov-preset-corner.tr { right: -2px; top: -2px; border-right-width: 3px; border-top-width: 3px; border-top-right-radius: 4px; }
+.ov-preset-corner.bl { left: -2px; bottom: -2px; border-left-width: 3px; border-bottom-width: 3px; border-bottom-left-radius: 4px; }
+.ov-preset-corner.br { right: -2px; bottom: -2px; border-right-width: 3px; border-bottom-width: 3px; border-bottom-right-radius: 4px; }
+
+.ov-preset-label {
+  position: absolute;
+  left: 0;
+  top: -30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  color: var(--canvas-fg);
+  background: rgba(24, 25, 30, 0.82);
+  box-shadow: var(--inset-hairline), 0 0 0 1px rgba(59, 130, 246, 0.5);
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  white-space: nowrap;
+}
+
+.ov-preset-app {
+  font-weight: 600;
+  color: var(--canvas-fg);
+}
+
+.ov-preset-title {
+  color: var(--canvas-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.ov-preset-size {
+  color: var(--canvas-fg-muted);
+}
+
+/* Action bar */
+.ov-actions {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+  padding: 0 6px;
+  border-radius: 14px;
+  background: var(--canvas-surface);
+  box-shadow: var(--shadow-float), var(--inset-hairline);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  animation: bar-in 220ms var(--ease-spring);
+  z-index: 3;
+}
+
+@keyframes bar-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.ov-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 9px;
+  border-radius: 9px;
+  color: var(--canvas-fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.ov-action:hover {
+  background: var(--canvas-surface-hover);
+}
+
+.ov-action:active {
+  transform: scale(0.96);
+}
+
+.ov-action.is-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0 12px;
+}
+
+.ov-action.is-primary:hover {
+  background: var(--accent-hover);
+}
+
+.ov-action:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.ov-actions-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--canvas-line-soft);
+}
+
+/* Hint */
+.ov-hint {
+  position: absolute;
+  left: 50%;
+  top: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  color: var(--canvas-fg-muted);
+  background: rgba(24, 25, 30, 0.62);
+  box-shadow: var(--inset-hairline);
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: hint-in 260ms var(--ease-out) 120ms both;
+}
+
+.ov-hint kbd {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  color: var(--canvas-fg);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 10.5px;
+}
+
+.ov-hint-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+}
+
+/* Rectangular pixel inspector */
+.magnifier {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 5px;
+  background: #262626;
+  box-shadow:
+    0 0 0 1px rgba(10, 10, 10, 0.9),
+    0 12px 34px rgba(0, 0, 0, 0.5);
+  z-index: 4;
+}
+
+.magnifier-preview {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+}
+
+.magnifier canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.magnifier-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(120, 120, 120, 0.13) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(120, 120, 120, 0.13) 1px, transparent 1px);
+  pointer-events: none;
+}
+
+.magnifier-crosshair {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      to right,
+      transparent calc(50% - 1px),
+      rgba(104, 159, 236, 0.9) calc(50% - 1px),
+      rgba(104, 159, 236, 0.9) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent calc(50% - 1px),
+      rgba(104, 159, 236, 0.9) calc(50% - 1px),
+      rgba(104, 159, 236, 0.9) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    );
+  pointer-events: none;
+}
+
+.magnifier-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  outline: 1px solid rgba(30, 30, 30, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.magnifier-info {
+  height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  color: rgba(255, 255, 255, 0.92);
+  background: #4b4b4b;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.magnifier-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.magnifier-info-label {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.magnifier-info-value,
+.magnifier-color {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.magnifier-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.magnifier-copied {
+  margin-left: auto;
+  color: #7ee787;
+  font-size: 10px;
+}
+
+.magnifier-shortcut {
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 10.5px;
+}
+
+.magnifier-shortcut kbd {
+  display: inline-block;
+  min-width: 15px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-align: center;
+}
+
+/* 选择阶段使用带留白间隙的自定义准星，参考像素拾色器的视觉。 */
+.ov-cursor {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 6;
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.95))
+    drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+}
+
+.ov-cursor::before,
+.ov-cursor::after {
+  content: "";
+  position: absolute;
+  background: #111;
+}
+
+.ov-cursor::before {
+  left: 50%;
+  top: 0;
+  width: 1.5px;
+  height: 100%;
+  transform: translateX(-50%);
+  background: linear-gradient(
+    to bottom,
+    #111 0 7px,
+    transparent 7px calc(100% - 7px),
+    #111 calc(100% - 7px) 100%
+  );
+}
+
+.ov-cursor::after {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 1.5px;
+  transform: translateY(-50%);
+  background: linear-gradient(
+    to right,
+    #111 0 7px,
+    transparent 7px calc(100% - 7px),
+    #111 calc(100% - 7px) 100%
+  );
+}
+
+.ov-cursor-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid #111;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+/* Error card */
+.ov-error {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(9, 10, 13, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.ov-error-card {
+  width: min(420px, calc(100vw - 48px));
+  padding: 22px;
+  border-radius: var(--radius-lg);
+  background: var(--canvas-surface);
+  box-shadow: var(--shadow-float), var(--inset-hairline);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  color: var(--canvas-fg);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ov-error-card p {
+  color: var(--canvas-fg-muted);
+  margin: 8px 0 18px;
+  user-select: text;
+}
+
+.ov-error-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ov-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--canvas-fg);
+  background: rgba(255, 255, 255, 0.1);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.ov-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.ov-btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.ov-btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+/* In-place annotation toolbar */
+.ov-toolbar {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: calc(100vw - 20px);
+  overflow-x: auto;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--canvas-surface);
+  box-shadow: var(--shadow-float), var(--inset-hairline);
+  backdrop-filter: blur(28px) saturate(1.8);
+  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  z-index: 6;
+  animation: bar-in 200ms var(--ease-spring);
+}
+
+.ov-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ov-toolbar-row.is-style {
+  padding: 2px 6px 4px;
+  gap: 12px;
+}
+
+.ov-toolbar-row.is-watermark {
+  gap: 8px;
+}
+
+.ov-toolbar-row.is-watermark .ov-range {
+  flex: 0 1 76px;
+  min-width: 58px;
+  max-width: 76px;
+}
+
+.ov-watermark-input {
+  width: 142px;
+  height: 27px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: var(--canvas-fg);
+  font: inherit;
+  font-size: 12px;
+  user-select: text;
+}
+
+.ov-watermark-input::placeholder {
+  color: var(--canvas-fg-muted);
+}
+
+.ov-watermark-input:focus {
+  box-shadow: inset 0 0 0 1.5px var(--canvas-line);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.ov-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--canvas-fg);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.ov-tool:hover {
+  background: var(--canvas-surface-hover);
+}
+
+.ov-tool:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.ov-tool.is-active {
+  color: var(--canvas-line);
+  background: rgba(59, 130, 246, 0.16);
+}
+
+.ov-tool.is-close:hover {
+  color: #ff6b63;
+  background: rgba(255, 69, 58, 0.14);
+}
+
+.ov-tool.is-confirm {
+  color: var(--accent-fg);
+  background: var(--accent);
+}
+
+.ov-tool.is-confirm:hover {
+  background: var(--accent-hover);
+}
+
+.ov-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 5px;
+  background: var(--canvas-line-soft);
+}
+
+.ov-swatches {
+  display: flex;
+  gap: 6px;
+}
+
+.ov-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  transition: transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.ov-swatch:hover {
+  transform: scale(1.15);
+}
+
+.ov-swatch.is-active {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.3),
+    0 0 0 2px var(--canvas-surface),
+    0 0 0 3.5px #fff;
+}
+
+.ov-range {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 90px;
+  max-width: 160px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.85) var(--fill, 30%),
+    rgba(255, 255, 255, 0.16) var(--fill, 30%)
+  );
+}
+
+.ov-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.ov-style-label {
+  font-size: 11px;
+  color: var(--canvas-fg-muted);
+  white-space: nowrap;
+}
+
+.ov-style-value {
+  font-size: 11px;
+  color: var(--canvas-fg);
+  min-width: 34px;
+  text-align: right;
+}
+
+/* Crop preview */
+.ov-crop {
+  position: absolute;
+  pointer-events: none;
+  outline: 1.5px dashed var(--canvas-line);
+  box-shadow: 0 0 0 9999px rgba(9, 10, 13, 0.42);
+}
+
+/* In-place text input */
+.ov-text-input {
+  position: absolute;
+  min-width: 120px;
+  min-height: 1.3em;
+  padding: 2px 4px;
+  margin: 0;
+  border: 0;
+  border-radius: 3px;
+  outline: 1.5px dashed var(--canvas-line);
+  outline-offset: 3px;
+  background: rgba(0, 0, 0, 0.12);
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-weight: 600;
+  line-height: 1.3;
+  resize: none;
+  overflow: hidden;
+  field-sizing: content;
+  z-index: 7;
+}

@@ -1,0 +1,234 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic version tag to build and release
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Validate tag and application versions
+        id: version
+        shell: bash
+        env:
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+          DISPATCHED: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+
+          tag="$TAG_NAME"
+          semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+
+          if [[ ! "$tag" =~ $semver_re ]]; then
+            echo "::error::Tag '$tag' is not a valid semantic version (for example 0.0.1 or 0.0.1-rc.1)."
+            exit 1
+          fi
+
+          if [[ "$DISPATCHED" == "true" ]]; then
+            git fetch origin "refs/tags/$tag:refs/tags/$tag"
+            git checkout --detach "$tag"
+          fi
+
+          git fetch origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tags must point to a commit on main."
+            exit 1
+          fi
+
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
+
+          for entry in \
+            "package.json=$package_version" \
+            "src-tauri/tauri.conf.json=$tauri_version" \
+            "src-tauri/Cargo.toml=$cargo_version"; do
+            file="${entry%%=*}"
+            version="${entry#*=}"
+            if [[ "$version" != "$tag" ]]; then
+              echo "::error::$file has version '$version', but the tag is '$tag'."
+              exit 1
+            fi
+          done
+
+          if [[ "$tag" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  create-release:
+    name: Create draft release
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create or reuse draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::Release $TAG is already published and cannot be rebuilt."
+              exit 1
+            fi
+            echo "Reusing existing draft release $TAG."
+            exit 0
+          fi
+
+          args=(
+            --draft
+            --verify-tag
+            --title "Snaply $TAG"
+            --generate-notes
+          )
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "$TAG" "${args[@]}"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [validate, create-release]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-latest
+            platform: macos
+            arch: arm64
+            args: --target aarch64-apple-darwin --bundles dmg
+          - name: macOS Intel
+            os: macos-latest
+            platform: macos
+            arch: x64
+            args: --target x86_64-apple-darwin --bundles dmg
+          - name: Windows x64
+            os: windows-latest
+            platform: windows
+            arch: x64
+            args: --bundles nsis,msi
+          - name: Linux x64
+            os: ubuntu-22.04
+            platform: linux
+            arch: x64
+            args: --bundles appimage,deb,rpm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libx11-dev libxcb1-dev libdbus-1-dev libpipewire-0.3-dev \
+            libwayland-dev patchelf rpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.name, 'macOS') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and upload installers
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.validate.outputs.tag }}
+          releaseName: Snaply ${{ needs.validate.outputs.tag }}
+          releaseDraft: true
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          generateReleaseNotes: false
+          releaseAssetNamePattern: Snaply_[version]_${{ matrix.platform }}_${{ matrix.arch }}_[bundle][ext]
+          args: ${{ matrix.args }}
+
+  publish:
+    name: Publish release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$PRERELEASE" == "false" ]]; then
+            gh release edit "$TAG" --draft=false --latest
+          else
+            gh release edit "$TAG" --draft=false
+          fi

@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820"><rect width="1400" height="820" fill="#F6F7F9"/><g transform="translate(60 90) scale(0.3515625)"><defs>
+  <radialGradient id="uid60-bg" cx="0.3" cy="0.08" r="1.15">
+    <stop offset="0" stop-color="#55596A"/><stop offset="0.45" stop-color="#23252C"/><stop offset="1" stop-color="#0A0B0D"/>
+  </radialGradient>
+  <linearGradient id="uid60-chrome" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.35" stop-color="#C2C9D6"/>
+    <stop offset="0.55" stop-color="#7A8392"/><stop offset="0.8" stop-color="#E6EAF1"/>
+    <stop offset="1" stop-color="#8A93A2"/>
+  </linearGradient>
+  <linearGradient id="uid60-bezelInner" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#000000" stop-opacity="0.45"/><stop offset="0.5" stop-color="#000000" stop-opacity="0.05"/><stop offset="1" stop-color="#000000" stop-opacity="0.3"/>
+  </linearGradient>
+  <linearGradient id="uid60-prism" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#7FF0D0"/><stop offset="0.33" stop-color="#8FB6FF"/>
+    <stop offset="0.66" stop-color="#C9A0FF"/><stop offset="1" stop-color="#FFB3D9"/>
+  </linearGradient>
+  <radialGradient id="uid60-sheen" cx="0.35" cy="0.22" r="0.75">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </radialGradient>
+  <clipPath id="uid60-tile"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z"/></clipPath>
+</defs>
+<g transform="translate(512 512) scale(0.86) translate(-512 -512)">
+  <g transform="translate(104 112) scale(3.2)" opacity="0.2"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="#000"/></g>
+  <!-- */ -->
+  <g transform="translate(104 104) scale(3.2)">
+    <g clip-path="url(#uid60-tile)">
+    <path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="url(#uid60-bg)"/>
+    <circle cx="128" cy="128" r="96" fill="url(#uid60-chrome)"/>
+    <circle cx="128" cy="128" r="95" fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1"/>
+    <circle cx="128" cy="128" r="74" fill="#16181C"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid60-bezelInner)"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid60-sheen)"/>
+    <g transform="translate(128 128) rotate(-40)"><rect x="-90" y="-3.5" width="180" height="7" rx="3.5" fill="url(#uid60-prism)"/></g>
+
+    </g>
+  </g>
+</g>
+</g><text x="480" y="170" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="52" font-weight="600" fill="#111">Snaply</text><text x="480" y="215" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" fill="#555">Chrome lens · prism light · obsidian tile</text><defs><linearGradient id="g0" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#55596A"/><stop offset=".5" stop-color="#23232C"/><stop offset="1" stop-color="#0A0B0D"/></linearGradient></defs><text x="480" y="275" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" letter-spacing="1.5" fill="#888">TILE</text><rect x="480" y="290" width="110" height="60" rx="10" fill="url(#g0)" stroke="#00000018"/><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".5" stop-color="#7A8392"/><stop offset="1" stop-color="#E6EAF1"/></linearGradient></defs><text x="610" y="275" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" letter-spacing="1.5" fill="#888">CHROME</text><rect x="610" y="290" width="110" height="60" rx="10" fill="url(#g1)" stroke="#00000018"/><defs><linearGradient id="g2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7FF0D0"/><stop offset=".5" stop-color="#8FB6FF"/><stop offset="1" stop-color="#FFB3D9"/></linearGradient></defs><text x="740" y="275" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" letter-spacing="1.5" fill="#888">PRISM</text><rect x="740" y="290" width="110" height="60" rx="10" fill="url(#g2)" stroke="#00000018"/><text x="480" y="400" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" letter-spacing="1.5" fill="#888">SCALE</text><g transform="translate(480 436) scale(0.125)"><defs>
+  <radialGradient id="uid480-bg" cx="0.3" cy="0.08" r="1.15">
+    <stop offset="0" stop-color="#55596A"/><stop offset="0.45" stop-color="#23252C"/><stop offset="1" stop-color="#0A0B0D"/>
+  </radialGradient>
+  <linearGradient id="uid480-chrome" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.35" stop-color="#C2C9D6"/>
+    <stop offset="0.55" stop-color="#7A8392"/><stop offset="0.8" stop-color="#E6EAF1"/>
+    <stop offset="1" stop-color="#8A93A2"/>
+  </linearGradient>
+  <linearGradient id="uid480-bezelInner" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#000000" stop-opacity="0.45"/><stop offset="0.5" stop-color="#000000" stop-opacity="0.05"/><stop offset="1" stop-color="#000000" stop-opacity="0.3"/>
+  </linearGradient>
+  <linearGradient id="uid480-prism" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#7FF0D0"/><stop offset="0.33" stop-color="#8FB6FF"/>
+    <stop offset="0.66" stop-color="#C9A0FF"/><stop offset="1" stop-color="#FFB3D9"/>
+  </linearGradient>
+  <radialGradient id="uid480-sheen" cx="0.35" cy="0.22" r="0.75">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </radialGradient>
+  <clipPath id="uid480-tile"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z"/></clipPath>
+</defs>
+<g transform="translate(512 512) scale(0.86) translate(-512 -512)">
+  <g transform="translate(104 112) scale(3.2)" opacity="0.2"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="#000"/></g>
+  <!-- */ -->
+  <g transform="translate(104 104) scale(3.2)">
+    <g clip-path="url(#uid480-tile)">
+    <path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="url(#uid480-bg)"/>
+    <circle cx="128" cy="128" r="96" fill="url(#uid480-chrome)"/>
+    <circle cx="128" cy="128" r="95" fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1"/>
+    <circle cx="128" cy="128" r="74" fill="#16181C"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid480-bezelInner)"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid480-sheen)"/>
+    <g transform="translate(128 128) rotate(-40)"><rect x="-90" y="-3.5" width="180" height="7" rx="3.5" fill="url(#uid480-prism)"/></g>
+
+    </g>
+  </g>
+</g>
+</g><text x="480" y="560" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" fill="#999">128px</text><g transform="translate(678 468) scale(0.0625)"><defs>
+  <radialGradient id="uid678-bg" cx="0.3" cy="0.08" r="1.15">
+    <stop offset="0" stop-color="#55596A"/><stop offset="0.45" stop-color="#23252C"/><stop offset="1" stop-color="#0A0B0D"/>
+  </radialGradient>
+  <linearGradient id="uid678-chrome" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.35" stop-color="#C2C9D6"/>
+    <stop offset="0.55" stop-color="#7A8392"/><stop offset="0.8" stop-color="#E6EAF1"/>
+    <stop offset="1" stop-color="#8A93A2"/>
+  </linearGradient>
+  <linearGradient id="uid678-bezelInner" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#000000" stop-opacity="0.45"/><stop offset="0.5" stop-color="#000000" stop-opacity="0.05"/><stop offset="1" stop-color="#000000" stop-opacity="0.3"/>
+  </linearGradient>
+  <linearGradient id="uid678-prism" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#7FF0D0"/><stop offset="0.33" stop-color="#8FB6FF"/>
+    <stop offset="0.66" stop-color="#C9A0FF"/><stop offset="1" stop-color="#FFB3D9"/>
+  </linearGradient>
+  <radialGradient id="uid678-sheen" cx="0.35" cy="0.22" r="0.75">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </radialGradient>
+  <clipPath id="uid678-tile"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z"/></clipPath>
+</defs>
+<g transform="translate(512 512) scale(0.86) translate(-512 -512)">
+  <g transform="translate(104 112) scale(3.2)" opacity="0.2"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="#000"/></g>
+  <!-- */ -->
+  <g transform="translate(104 104) scale(3.2)">
+    <g clip-path="url(#uid678-tile)">
+    <path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="url(#uid678-bg)"/>
+    <circle cx="128" cy="128" r="96" fill="url(#uid678-chrome)"/>
+    <circle cx="128" cy="128" r="95" fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1"/>
+    <circle cx="128" cy="128" r="74" fill="#16181C"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid678-bezelInner)"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid678-sheen)"/>
+    <g transform="translate(128 128) rotate(-40)"><rect x="-90" y="-3.5" width="180" height="7" rx="3.5" fill="url(#uid678-prism)"/></g>
+
+    </g>
+  </g>
+</g>
+</g><text x="678" y="560" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" fill="#999">64px</text><g transform="translate(812 484) scale(0.03125)"><defs>
+  <radialGradient id="uid812-bg" cx="0.3" cy="0.08" r="1.15">
+    <stop offset="0" stop-color="#55596A"/><stop offset="0.45" stop-color="#23252C"/><stop offset="1" stop-color="#0A0B0D"/>
+  </radialGradient>
+  <linearGradient id="uid812-chrome" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.35" stop-color="#C2C9D6"/>
+    <stop offset="0.55" stop-color="#7A8392"/><stop offset="0.8" stop-color="#E6EAF1"/>
+    <stop offset="1" stop-color="#8A93A2"/>
+  </linearGradient>
+  <linearGradient id="uid812-bezelInner" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#000000" stop-opacity="0.45"/><stop offset="0.5" stop-color="#000000" stop-opacity="0.05"/><stop offset="1" stop-color="#000000" stop-opacity="0.3"/>
+  </linearGradient>
+  <linearGradient id="uid812-prism" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#7FF0D0"/><stop offset="0.33" stop-color="#8FB6FF"/>
+    <stop offset="0.66" stop-color="#C9A0FF"/><stop offset="1" stop-color="#FFB3D9"/>
+  </linearGradient>
+  <radialGradient id="uid812-sheen" cx="0.35" cy="0.22" r="0.75">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </radialGradient>
+  <clipPath id="uid812-tile"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z"/></clipPath>
+</defs>
+<g transform="translate(512 512) scale(0.86) translate(-512 -512)">
+  <g transform="translate(104 112) scale(3.2)" opacity="0.2"><path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="#000"/></g>
+  <!-- */ -->
+  <g transform="translate(104 104) scale(3.2)">
+    <g clip-path="url(#uid812-tile)">
+    <path d="M25.00 66.30 C25.00 47.71 47.71 25.00 66.30 25.00 L133.70 25.00 C152.28 25.00 175.00 47.71 175.00 66.30 L175.00 133.70 C175.00 152.28 152.28 175.00 133.70 175.00 L66.30 175.00 C47.71 175.00 25.00 152.28 25.00 133.70 L25.00 66.30 Z" fill="url(#uid812-bg)"/>
+    <circle cx="128" cy="128" r="96" fill="url(#uid812-chrome)"/>
+    <circle cx="128" cy="128" r="95" fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="1"/>
+    <circle cx="128" cy="128" r="74" fill="#16181C"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid812-bezelInner)"/>
+    <circle cx="128" cy="128" r="74" fill="url(#uid812-sheen)"/>
+    <g transform="translate(128 128) rotate(-40)"><rect x="-90" y="-3.5" width="180" height="7" rx="3.5" fill="url(#uid812-prism)"/></g>
+
+    </g>
+  </g>
+</g>
+</g><text x="812" y="560" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="12" fill="#999">32px</text><rect x="60" y="620" width="380" height="120" rx="20" fill="#F3F4F6" stroke="#00000012"/><text x="100" y="662" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" letter-spacing="1.5" fill="#888">TRAY · LIGHT MENU BAR</text><g transform="translate(100 680) scale(1.0)"><circle cx="20.5" cy="21.5" r="14" fill="none" stroke="#000" stroke-width="3.4"/><path d="M10.4 31.6 L30.6 11.4" fill="none" stroke="#000" stroke-width="2.4"/></g><g transform="translate(170 691) scale(0.5)"><circle cx="20.5" cy="21.5" r="14" fill="none" stroke="#000" stroke-width="3.4"/><path d="M10.4 31.6 L30.6 11.4" fill="none" stroke="#000" stroke-width="2.4"/></g><rect x="480" y="620" width="860" height="120" rx="20" fill="#1E1F22"/><text x="700" y="662" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="13" letter-spacing="1.5" fill="#888">TRAY · DARK MENU BAR</text><g transform="translate(700 680) scale(1.0)"><circle cx="20.5" cy="21.5" r="14" fill="none" stroke="#FFF" stroke-width="3.4"/><path d="M10.4 31.6 L30.6 11.4" fill="none" stroke="#FFF" stroke-width="2.4"/></g><g transform="translate(770 691) scale(0.5)"><circle cx="20.5" cy="21.5" r="14" fill="none" stroke="#FFF" stroke-width="3.4"/><path d="M10.4 31.6 L30.6 11.4" fill="none" stroke="#FFF" stroke-width="2.4"/></g></svg>

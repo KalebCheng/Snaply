@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Snaply 设置</title>
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+        background: #f6f7f9;
+        color: #5c616b;
+      }
+      #snaply-settings-boot {
+        height: 100%;
+        display: grid;
+        place-items: center;
+        background: #f6f7f9;
+        font: 13px -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body,
+        #root {
+          background: #131417;
+          color: #a2a7b0;
+        }
+        #snaply-settings-boot {
+          background: #131417;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div id="snaply-settings-boot">Snaply</div></div>
+    <script type="module" src="/src/settings-entry.tsx"></script>
+  </body>
+</html>
