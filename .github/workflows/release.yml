@@ -21,7 +21,7 @@ permissions:
 jobs:
   validate:
     name: Validate release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref }}
@@ -93,7 +93,7 @@ jobs:
   create-release:
     name: Create draft release
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Create or reuse draft release
@@ -131,11 +131,11 @@ jobs:
   frontend:
     name: Build frontend
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.validate.outputs.tag }}
 
@@ -145,7 +145,7 @@ jobs:
           version: 10
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -157,7 +157,7 @@ jobs:
         run: pnpm build
 
       - name: Upload frontend build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: frontend-dist
           path: dist
@@ -211,7 +211,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.validate.outputs.tag }}
 
@@ -223,7 +223,8 @@ jobs:
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
             libx11-dev libxcb1-dev libdbus-1-dev libpipewire-0.3-dev \
-            libwayland-dev patchelf rpm
+            libspa-0.2-dev libgbm-dev libdrm-dev libegl1-mesa-dev \
+            libxkbcommon-dev libwayland-dev patchelf rpm
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -242,7 +243,7 @@ jobs:
           version: 10
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -251,7 +252,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download frontend build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: frontend-dist
           path: dist
@@ -272,7 +273,7 @@ jobs:
   publish:
     name: Publish release
     needs: [validate, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Publish release

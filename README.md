@@ -63,7 +63,8 @@ sudo apt-get update
 sudo apt-get install -y \
   libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-  libx11-dev libxcb1-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev
+  libx11-dev libxcb1-dev libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev \
+  libgbm-dev libdrm-dev libegl1-mesa-dev libxkbcommon-dev libwayland-dev
 ```
 
 Install dependencies and start the desktop app:
