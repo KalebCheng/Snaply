@@ -15,7 +15,7 @@ const defaultSettings: Settings = {
   saveDir: null,
   copyAfterCapture: false,
   language: "zh-CN",
-  dockVisibility: "followWindow",
+  dockVisibility: "hide",
 };
 
 const fallbackPayload: SettingsPayload = {

@@ -24,6 +24,7 @@ type Drag =
   | { kind: "new"; origin: Point; current: Point }
   | { kind: "move"; origin: Point; start: Rect; current: Rect }
   | { kind: "resize"; handle: Handle; current: Rect }
+  | { kind: "text"; origin: Point }
   | { kind: "draw"; tool: ToolId; origin: Point; points: Point[] }
   | { kind: "shapeMove"; id: string; origin: Point; start: Shape }
   | { kind: "crop"; origin: Point; current: Rect };
@@ -80,6 +81,7 @@ export function Overlay() {
 
   const baseRef = useRef<HTMLCanvasElement>(null);
   const artRef = useRef<HTMLCanvasElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
   const presetAtDownRef = useRef<WindowHit | null>(null);
   const commitLockRef = useRef(false);
   const cursorRef = useRef<Point | null>(cursor);
@@ -289,6 +291,18 @@ export function Overlay() {
     };
   }, []);
 
+  const textInputActive = textInput !== null;
+  useEffect(() => {
+    if (!textInputActive) return;
+    const frame = window.requestAnimationFrame(() => {
+      const input = textInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [textInputActive]);
+
   // Coordinate conversion
   const toImage = (p: Point): Point => {
     const k = image ? image.width / viewport.width : 1;
@@ -320,6 +334,12 @@ export function Overlay() {
   const focusOverlay = () => {
     if (!win) return;
     void win.setFocus().catch(() => undefined);
+  };
+
+  const onRootPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest(".ov-toolbar, .ov-text-input")) return;
+    focusOverlay();
   };
 
   const leaveOverlay = () => {
@@ -472,8 +492,7 @@ export function Overlay() {
       return;
     }
     if (active === "text") {
-      setTextInput({ x: p.x, y: p.y, value: "" });
-      return;
+      return setDrag({ kind: "text", origin: p });
     }
     if (active === "crop") {
       setDrag({ kind: "crop", origin: p, current: { x: p.x, y: p.y, width: 0, height: 0 } });
@@ -531,7 +550,9 @@ export function Overlay() {
     if (!d) return;
     const p = pointOf(e);
     if (!p) return;
-    if (d.kind === "new") {
+    if (d.kind === "text") {
+      setTextInput({ x: d.origin.x, y: d.origin.y, value: "" });
+    } else if (d.kind === "new") {
       const moved = Math.hypot(p.x - d.origin.x, p.y - d.origin.y) > 4;
       const preset = presetAtDownRef.current;
       const rect = moved
@@ -735,7 +756,7 @@ export function Overlay() {
       className="overlay-root"
       data-mode={mode}
       data-ready={!!image}
-      onPointerDown={focusOverlay}
+      onPointerDown={onRootPointerDown}
       onPointerLeave={leaveOverlay}
     >
       <canvas ref={baseRef} className="ov-canvas" />
@@ -847,11 +868,13 @@ export function Overlay() {
 
       {textInput && (
         <textarea
-          autoFocus
+          ref={textInputRef}
           className="ov-text-input"
           style={{ left: textInput.x, top: textInput.y, color, fontSize: Math.max(12, fontSize / k) }}
           value={textInput.value}
-          onChange={(e) => setTextInput({ ...textInput, value: e.target.value })}
+          onChange={(e) =>
+            setTextInput((current) => (current ? { ...current, value: e.target.value } : current))
+          }
           onBlur={commitText}
           onKeyDown={(e) => {
             if (e.key === "Escape") {

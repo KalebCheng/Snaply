@@ -109,14 +109,20 @@ pub fn reset_shortcut(app: AppHandle) -> Result<SettingsPayload, String> {
 }
 
 #[tauri::command]
-pub fn pick_save_dir(app: AppHandle) -> Result<Option<String>, String> {
+pub async fn pick_save_dir(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let picked = app
-        .dialog()
+
+    // 文件选择器必须在主线程非阻塞地创建；同步版本会阻塞 Tauri 事件循环。
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
         .file()
         .set_title("选择截图保存目录")
-        .blocking_pick_folder();
-    Ok(picked.map(|p| p.to_string()))
+        .pick_folder(move |picked| {
+            let _ = tx.try_send(picked.map(|path| path.to_string()));
+        });
+    rx.recv()
+        .await
+        .ok_or_else(|| "保存目录选择器意外关闭".to_string())
 }
 
 #[tauri::command]
@@ -167,7 +173,7 @@ mod tests {
         let value = serde_json::to_value(payload).unwrap();
 
         assert_eq!(value["settings"]["language"], "zh-CN");
-        assert_eq!(value["settings"]["dockVisibility"], "followWindow");
+        assert_eq!(value["settings"]["dockVisibility"], "hide");
         assert_eq!(value["defaultSaveDir"], "/tmp/Snaply");
         assert_eq!(value["effectiveShortcut"], settings::DEFAULT_SHORTCUT);
         assert!(value.get("shortcut").is_none());

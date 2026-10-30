@@ -705,4 +705,9 @@ body,
   overflow: hidden;
   field-sizing: content;
   z-index: 7;
+  color-scheme: dark;
+  caret-color: currentColor;
+  cursor: text;
+  pointer-events: auto;
+  user-select: text;
 }

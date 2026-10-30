@@ -61,7 +61,8 @@ impl AppState {
             last_edit_path: Mutex::new(None),
             allow_exit: AtomicBool::new(false),
             #[cfg(target_os = "macos")]
-            dock_visible: AtomicBool::new(false),
+            // macOS starts as a regular foreground app with a visible Dock icon.
+            dock_visible: AtomicBool::new(true),
         }
     }
 }

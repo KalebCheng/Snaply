@@ -20,9 +20,9 @@ pub enum Language {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DockVisibility {
+    #[default]
     #[serde(rename = "hide")]
     Hide,
-    #[default]
     #[serde(rename = "followWindow")]
     FollowWindow,
     #[serde(rename = "show")]
@@ -51,7 +51,7 @@ impl Default for Settings {
             save_dir: None,
             copy_after_capture: false,
             language: Language::default(),
-            dock_visibility: DockVisibility::FollowWindow,
+            dock_visibility: DockVisibility::Hide,
         }
     }
 }
@@ -115,7 +115,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(settings.language, Language::SimplifiedChinese);
-        assert_eq!(settings.dock_visibility, DockVisibility::FollowWindow);
+        assert_eq!(settings.dock_visibility, DockVisibility::Hide);
     }
 
     #[test]
@@ -126,9 +126,9 @@ mod tests {
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains(r#""language":"en""#));
-        assert!(json.contains(r#""dockVisibility":"followWindow""#));
+        assert!(json.contains(r#""dockVisibility":"hide""#));
         let decoded: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.language, Language::English);
-        assert_eq!(decoded.dock_visibility, DockVisibility::FollowWindow);
+        assert_eq!(decoded.dock_visibility, DockVisibility::Hide);
     }
 }
