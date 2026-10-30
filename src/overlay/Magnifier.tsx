@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Point } from "../types";
 import { api, isTauri } from "../lib/ipc";
+import type { OverlayCopy } from "./i18n";
 
 type Props = {
   source: ImageBitmap | null;
@@ -10,6 +11,7 @@ type Props = {
   zoom?: number;
   width?: number;
   previewHeight?: number;
+  copy: OverlayCopy;
 };
 
 /**
@@ -22,6 +24,7 @@ export function Magnifier({
   zoom = 9,
   width = 220,
   previewHeight = 120,
+  copy,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const copiedTimerRef = useRef<number | null>(null);
@@ -34,6 +37,20 @@ export function Magnifier({
       ? `#${rgb.map((value) => value.toString(16).padStart(2, "0")).join("").toUpperCase()}`
       : `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
     : "";
+
+  const copyColor = useCallback(() => {
+    if (!colorText) return;
+    const copyTask = isTauri()
+      ? api.copyText(colorText)
+      : navigator.clipboard.writeText(colorText);
+    void copyTask
+      .then(() => {
+        setCopied(true);
+        if (copiedTimerRef.current != null) window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1200);
+      })
+      .catch(() => setCopied(false));
+  }, [colorText]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -90,21 +107,22 @@ export function Magnifier({
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && colorText) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        const copy = isTauri()
-          ? api.copyText(colorText)
-          : navigator.clipboard.writeText(colorText);
-        void copy
-          .then(() => {
-            setCopied(true);
-            if (copiedTimerRef.current != null) window.clearTimeout(copiedTimerRef.current);
-            copiedTimerRef.current = window.setTimeout(() => setCopied(false), 1200);
-          })
-          .catch(() => setCopied(false));
+        copyColor();
       }
     };
+    const onCopy = (event: ClipboardEvent) => {
+      if (!colorText) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      copyColor();
+    };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [colorText, point]);
+    window.addEventListener("copy", onCopy, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("copy", onCopy, true);
+    };
+  }, [colorText, copyColor, point]);
 
   useEffect(
     () => () => {
@@ -145,7 +163,7 @@ export function Magnifier({
       </div>
       <div className="magnifier-info">
         <div className="magnifier-info-row">
-          <span className="magnifier-info-label">坐标</span>
+          <span className="magnifier-info-label">{copy.coordinate}</span>
           <span className="magnifier-info-value tnum">
             {Math.round(point.x)}, {Math.round(point.y)}
           </span>
@@ -153,13 +171,13 @@ export function Magnifier({
         <div className="magnifier-info-row">
           <span className="magnifier-swatch" style={{ background: colorText }} />
           <span className="magnifier-color tnum">{colorText}</span>
-          {copied && <span className="magnifier-copied">已复制</span>}
+          {copied && <span className="magnifier-copied">{copy.copied}</span>}
         </div>
         <div className="magnifier-shortcut">
-          按 <kbd>⌘C</kbd> 复制颜色值
+          <kbd>⌘C</kbd> {copy.copyColor}
         </div>
         <div className="magnifier-shortcut">
-          按 <kbd>Shift</kbd> 切换 RGB/HEX
+          <kbd>Shift</kbd> {copy.switchFormat}
         </div>
       </div>
     </div>

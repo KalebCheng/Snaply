@@ -1,11 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
-  <!--
-    托盘图标（单色模板，22pt @2x = 44px）。macOS 只取 alpha 通道并自动反色；
-    Windows / Linux 也兼容深浅背景。
-    取景框与中心焦点表达截图动作，避免使用系统禁止符号。
-  -->
-  <path d="M7 16V7H16 M28 7H37V16 M37 28V37H28 M16 37H7V28"
-        fill="none" stroke="#000000" stroke-width="4.2"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="22" cy="22" r="2.8" fill="#000000"/>
+  <!-- Monochrome template matching the About page Snaply mark. -->
+  <g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 14.5V7H14.5M29.5 7H37V14.5M37 29.5V37H29.5M14.5 37H7V29.5" stroke-width="3.6"/>
+    <path d="M14.5 29.5L26 18" stroke-width="3"/>
+  </g>
+  <path d="M31 13.2L29.3 22.2L22 15Z" fill="#000000"/>
 </svg>

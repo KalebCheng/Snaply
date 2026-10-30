@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api, isTauri } from "../lib/ipc";
-import { decodePng } from "../lib/decode";
+import { decodeOverlayFrame } from "../lib/decode";
 import { composeExport } from "../lib/export";
 import { drawShapeList } from "../lib/render";
 import { normalizeRect, uid } from "../lib/geometry";
-import type { Point, Rect, Shape, ToolId, WindowHit } from "../types";
+import type { Language, Point, Rect, Shape, ToolId, WindowHit } from "../types";
 import { Magnifier } from "./Magnifier";
+import { overlayTranslations, type OverlayCopy } from "./i18n";
 import {
   HANDLE_CURSOR,
   HANDLE_SIZE,
@@ -29,16 +30,16 @@ type Drag =
   | { kind: "shapeMove"; id: string; origin: Point; start: Shape }
   | { kind: "crop"; origin: Point; current: Rect };
 
-const TOOLS: { id: ToolId; label: string; hint: string }[] = [
-  { id: "select", label: "选择", hint: "V" },
-  { id: "rect", label: "矩形", hint: "R" },
-  { id: "ellipse", label: "椭圆", hint: "O" },
-  { id: "arrow", label: "箭头", hint: "A" },
-  { id: "pen", label: "画笔", hint: "P" },
-  { id: "blur", label: "马赛克", hint: "B" },
-  { id: "text", label: "文字", hint: "T" },
-  { id: "watermark", label: "水印", hint: "W" },
-  { id: "crop", label: "裁剪", hint: "X" },
+const TOOLS: { id: ToolId; hint: string }[] = [
+  { id: "select", hint: "V" },
+  { id: "rect", hint: "R" },
+  { id: "ellipse", hint: "O" },
+  { id: "arrow", hint: "A" },
+  { id: "pen", hint: "P" },
+  { id: "blur", hint: "B" },
+  { id: "text", hint: "T" },
+  { id: "watermark", hint: "W" },
+  { id: "crop", hint: "X" },
 ];
 
 /** Read the monitor id from the overlay URL. */
@@ -53,6 +54,9 @@ function readMonitorId(): number | null {
  */
 export function Overlay() {
   const monitorId = useState(readMonitorId)[0];
+  const prewarm = useState(
+    () => new URLSearchParams(window.location.search).get("prewarm") === "1",
+  )[0];
   const win = useState(() => (isTauri() ? getCurrentWebviewWindow() : null))[0];
   const [image, setImage] = useState<ImageBitmap | null>(null);
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -78,12 +82,15 @@ export function Overlay() {
   const [watermarkOpacity, setWatermarkOpacity] = useState(0.25);
   const [textInput, setTextInput] = useState<{ x: number; y: number; value: string } | null>(null);
   const [copyAfterCapture, setCopyAfterCapture] = useState(false);
+  const [language, setLanguage] = useState<Language>("zh-CN");
+  const copy = overlayTranslations[language];
 
   const baseRef = useRef<HTMLCanvasElement>(null);
   const artRef = useRef<HTMLCanvasElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const presetAtDownRef = useRef<WindowHit | null>(null);
   const commitLockRef = useRef(false);
+  const sessionRef = useRef<number | null>(null);
   const cursorRef = useRef<Point | null>(cursor);
   cursorRef.current = cursor;
   const toolRef = useRef(tool);
@@ -91,9 +98,15 @@ export function Overlay() {
   const styleRef = useRef({ color, strokeWidth, fontSize });
   styleRef.current = { color, strokeWidth, fontSize };
 
+  const syncSettings = useCallback(async () => {
+    const settings = await api.getSettings();
+    setCopyAfterCapture(settings.settings.copyAfterCapture);
+    setLanguage(settings.settings.language);
+  }, []);
+
   // Lifecycle
   useEffect(() => {
-    if (monitorId == null) return setError("缺少显示器参数");
+    if (monitorId == null) return setError(copy.missingMonitor);
     if (!isTauri()) {
       // Draw a demo image when running outside Tauri.
       const demo = document.createElement("canvas");
@@ -119,17 +132,19 @@ export function Overlay() {
     (async () => {
       try {
         // Settings failures must not block capture.
-        void api
-          .getSettings()
-          .then((settings) => setCopyAfterCapture(settings.settings.copyAfterCapture))
-          .catch(() => undefined);
+        void syncSettings().catch(() => undefined);
+        if (prewarm) return;
         // Read settings independently while decoding the screenshot.
-        setImage(await decodePng(await api.overlayImage(monitorId)));
+        setImage(await decodeOverlayFrame(await api.overlayImage(monitorId)));
       } catch (e) {
         setError(String(e));
       }
     })();
-  }, [monitorId]);
+  }, [copy.missingMonitor, monitorId, prewarm, syncSettings]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
@@ -138,20 +153,51 @@ export function Overlay() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
-    const un = listen("overlay-refresh", async () => {
-      if (monitorId == null) return;
-      try {
+    if (!isTauri() || monitorId == null) return;
+    let disposed = false;
+    let unlisteners: UnlistenFn[] = [];
+    void Promise.all([
+      listen<number>("overlay-refresh", async ({ payload }) => {
+        if (sessionRef.current === payload) return;
+        sessionRef.current = payload;
+        try {
+          resetAll();
+          setError(null);
+          void syncSettings().catch(() => undefined);
+          const next = await decodeOverlayFrame(await api.overlayImage(monitorId));
+          setImage((previous) => {
+            previous?.close();
+            return next;
+          });
+        } catch {
+          /* The capture session may already be closed. */
+        }
+      }),
+      listen("overlay-reset", () => {
         resetAll();
-        setImage(await decodePng(await api.overlayImage(monitorId)));
+        setError(null);
+        setImage((previous) => {
+          previous?.close();
+          return null;
+        });
+      }),
+    ]).then(async (registered) => {
+      if (disposed) {
+        registered.forEach((unlisten) => unlisten());
+        return;
+      }
+      unlisteners = registered;
+      try {
+        await api.overlayReady(monitorId);
       } catch {
-        /* The capture session may already be closed. */
+        /* The application may be shutting down. */
       }
     });
     return () => {
-      un.then((f) => f());
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [monitorId]);
+  }, [monitorId, syncSettings]);
 
   // 未获得焦点的覆盖层可能收不到鼠标事件。每个覆盖层主动轮询全局光标，
   // 这样从 A 屏移动到 B 屏时，两边都能及时更新本地坐标和窗口命中结果。
@@ -391,7 +437,7 @@ export function Overlay() {
         .catch((e) => {
           commitLockRef.current = false;
           setBusy(false);
-          setError(`复制失败：${String(e)}`);
+          setError(`${copy.copyFailed}: ${String(e)}`);
         });
       return;
     }
@@ -622,7 +668,7 @@ export function Overlay() {
         setShapes((prev) => prev.slice(0, -1));
         return;
       }
-      if (mod && k === "c" && (mode === "edit" || hover)) {
+      if (mod && k === "c" && (mode === "edit" || sel)) {
         e.preventDefault();
         commit("copy");
         return;
@@ -696,6 +742,7 @@ export function Overlay() {
     watermarkText,
     watermarkFontSize,
     watermarkOpacity,
+    copy.copyFailed,
   ]);
 
   // Some WebViews emit copy without a keydown event, so handle both.
@@ -706,14 +753,14 @@ export function Overlay() {
         target?.tagName === "TEXTAREA" ||
         (target?.tagName === "INPUT" && (target as HTMLInputElement).type === "text") ||
         target?.isContentEditable;
-      if (textInput || editingText || !(mode === "edit" || hover)) return;
+      if (textInput || editingText || !(mode === "edit" || sel)) return;
       e.preventDefault();
       commit("copy");
     };
     document.addEventListener("copy", onCopy, true);
     return () => document.removeEventListener("copy", onCopy, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, hover, textInput, sel, shapes, image, copyAfterCapture, viewport, color, strokeWidth, fontSize, watermarkText, watermarkFontSize, watermarkOpacity]);
+  }, [mode, textInput, sel, shapes, image, copyAfterCapture, viewport, color, strokeWidth, fontSize, watermarkText, watermarkFontSize, watermarkOpacity]);
 
   useEffect(() => {
     const onContext = (e: MouseEvent) => {
@@ -731,10 +778,10 @@ export function Overlay() {
     return (
       <div className="ov-error">
         <div className="ov-error-card">
-          <div className="ov-error-title">无法截图</div>
+          <div className="ov-error-title">{copy.errorTitle}</div>
           <p>{error}</p>
           <button className="ov-btn ov-btn-primary" onClick={cancel}>
-            关闭
+            {copy.close}
           </button>
         </div>
       </div>
@@ -804,7 +851,7 @@ export function Overlay() {
             className="ov-preset-label"
             style={{ top: preset.y < 32 ? 4 : -30 }}
           >
-            <span className="ov-preset-app">{preset.appName || "窗口"}</span>
+            <span className="ov-preset-app">{preset.appName || copy.window}</span>
             {preset.title && preset.title !== preset.appName && <span className="ov-preset-title">{preset.title}</span>}
             <span className="tnum ov-preset-size">
               {Math.round(preset.width)} × {Math.round(preset.height)}
@@ -885,22 +932,29 @@ export function Overlay() {
               commitText();
             }
           }}
-          placeholder="输入文字，回车确认"
+          placeholder={copy.textPlaceholder}
         />
       )}
 
       {mode === "select" && !liveSel && (
         <div className="ov-hint">
-          <span>拖动选择区域；高亮窗口后可点击标注，或直接按 <kbd>⌘C</kbd> 复制</span>
+          <span>
+            {copy.hintDrag} <kbd>⌘C</kbd> {copy.hintCopy}
+          </span>
           <span className="ov-hint-dot" />
           <span>
-            <kbd>Esc</kbd> 退出
+            <kbd>Esc</kbd> {copy.hintEsc}
           </span>
         </div>
       )}
 
       {magnifierOn && mode === "select" && !busy && (drag || (!sel && cursor)) && image && (
-        <Magnifier source={image} point={altDown && sel ? null : cursor} viewport={viewport} />
+        <Magnifier
+          source={image}
+          point={altDown && sel ? null : cursor}
+          viewport={viewport}
+          copy={copy}
+        />
       )}
 
       {mode === "edit" && sel && (
@@ -922,6 +976,7 @@ export function Overlay() {
           watermarkText={watermarkText}
           watermarkFontSize={watermarkFontSize}
           watermarkOpacity={watermarkOpacity}
+          copy={copy}
           onWatermarkText={(text) => {
             setWatermarkText(text);
             updateWatermark({ text });
@@ -1166,6 +1221,7 @@ type EditToolbarProps = {
   watermarkText: string;
   watermarkFontSize: number;
   watermarkOpacity: number;
+  copy: OverlayCopy;
   onWatermarkText: (text: string) => void;
   onWatermarkFontSize: (size: number) => void;
   onWatermarkOpacity: (opacity: number) => void;
@@ -1183,7 +1239,7 @@ const PALETTE = ["#FF453A", "#FF9F0A", "#30D158", "#3B82F6", "#BF5AF2", "#FFFFFF
 
 /** Annotation toolbar with a dedicated style row. */
 function EditToolbar(p: EditToolbarProps) {
-  const { selection: s, viewport: v } = p;
+  const { copy, selection: s, viewport: v } = p;
   // Use the measured toolbar width so it stays inside the viewport.
   const barW = Math.min(548, Math.max(280, v.width - 20));
   const showStyle = p.tool === "rect" || p.tool === "ellipse" || p.tool === "arrow" || p.tool === "pen" || p.tool === "blur";
@@ -1217,30 +1273,30 @@ function EditToolbar(p: EditToolbarProps) {
           <button
             key={t.id}
             className={`ov-tool ${p.tool === t.id ? "is-active" : ""}`}
-            title={`${t.label} (${t.hint.toUpperCase()})`}
+            title={`${copy.tools[t.id]} (${t.hint})`}
             onClick={() => p.onTool(t.id)}
           >
             <ToolIcon id={t.id} />
           </button>
         ))}
         <span className="ov-sep" />
-        <button className="ov-tool" title="撤销 (⌘Z)" onClick={p.onUndo}>
+        <button className="ov-tool" title={`${copy.undo} (⌘Z)`} onClick={p.onUndo}>
           <IconUndo />
         </button>
-        <button className="ov-tool" title="重做" onClick={p.onRedo} disabled>
+        <button className="ov-tool" title={copy.redo} onClick={p.onRedo} disabled>
           <IconRedo />
         </button>
         <span className="ov-sep" />
-        <button className="ov-tool" title="复制 (⌘C)" onClick={p.onCopy} disabled={p.busy}>
+        <button className="ov-tool" title={`${copy.copyAction} (⌘C)`} onClick={p.onCopy} disabled={p.busy}>
           <IconCopy />
         </button>
-        <button className="ov-tool" title="保存 (⌘S)" onClick={p.onSave} disabled={p.busy}>
+        <button className="ov-tool" title={`${copy.save} (⌘S)`} onClick={p.onSave} disabled={p.busy}>
           <IconDownload />
         </button>
-        <button className="ov-tool is-close" title="关闭 (Esc)" onClick={p.onClose} disabled={p.busy}>
+        <button className="ov-tool is-close" title={`${copy.close} (Esc)`} onClick={p.onClose} disabled={p.busy}>
           <IconX />
         </button>
-        <button className="ov-tool is-confirm" title="完成 (Enter)" onClick={p.onDone} disabled={p.busy}>
+        <button className="ov-tool is-confirm" title={`${copy.done} (Enter)`} onClick={p.onDone} disabled={p.busy}>
           <IconCheck />
         </button>
       </div>
@@ -1273,7 +1329,7 @@ function EditToolbar(p: EditToolbarProps) {
 
       {p.tool === "text" && (
         <div className="ov-toolbar-row is-style">
-          <span className="ov-style-label">字号</span>
+          <span className="ov-style-label">{copy.fontSize}</span>
           <input
             className="ov-range"
             type="range"
@@ -1299,10 +1355,10 @@ function EditToolbar(p: EditToolbarProps) {
                 e.currentTarget.blur();
               }
             }}
-            placeholder="水印文字"
+            placeholder={copy.watermarkText}
             spellCheck={false}
           />
-          <span className="ov-style-label">字号</span>
+          <span className="ov-style-label">{copy.fontSize}</span>
           <input
             className="ov-range"
             type="range"
@@ -1313,7 +1369,7 @@ function EditToolbar(p: EditToolbarProps) {
             title={`水印字号 ${p.watermarkFontSize}px`}
           />
           <span className="ov-style-value tnum">{p.watermarkFontSize}px</span>
-          <span className="ov-style-label">透明度</span>
+          <span className="ov-style-label">{copy.opacity}</span>
           <input
             className="ov-range"
             type="range"

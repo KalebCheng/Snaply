@@ -1,27 +1,35 @@
-use std::sync::{atomic::AtomicBool, Mutex};
+use std::collections::HashSet;
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use crate::overlay::MonitorInfo;
 use crate::platform::MonitorGeom;
 use crate::settings::Settings;
 
 pub struct PendingCapture {
-    pub png_by_id: std::collections::HashMap<u32, Vec<u8>>,
+    pub frames_by_id: std::collections::HashMap<u32, CapturedFrame>,
     pub monitors: Vec<MonitorInfo>,
     pub geoms: Vec<MonitorGeom>,
     pub started_at_ms: u64,
 }
 
+#[derive(Clone)]
+pub struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Arc<Vec<u8>>,
+}
+
 impl PendingCapture {
     pub fn new() -> Self {
         Self {
-            png_by_id: Default::default(),
+            frames_by_id: Default::default(),
             monitors: Vec::new(),
             geoms: Vec::new(),
             started_at_ms: 0,
         }
     }
     pub fn clear(&mut self) {
-        self.png_by_id.clear();
+        self.frames_by_id.clear();
         self.monitors.clear();
         self.geoms.clear();
         self.started_at_ms = 0;
@@ -42,6 +50,8 @@ pub struct AppState {
     /// Prevent repeated hotkey presses from stacking overlay sessions.
     pub capture_lock: AtomicBool,
     pub pending: Mutex<PendingCapture>,
+    /// Monitor ids whose prewarmed overlay WebView has finished loading.
+    pub ready_overlays: Mutex<HashSet<u32>>,
     /// Path to the most recent editor image for follow-up actions.
     pub last_edit_path: Mutex<Option<String>>,
     /// Explicit quit requests bypass the tray application exit guard.
@@ -58,6 +68,7 @@ impl AppState {
             last_shot: Mutex::new(None),
             capture_lock: AtomicBool::new(false),
             pending: Mutex::new(PendingCapture::new()),
+            ready_overlays: Mutex::new(HashSet::new()),
             last_edit_path: Mutex::new(None),
             allow_exit: AtomicBool::new(false),
             #[cfg(target_os = "macos")]

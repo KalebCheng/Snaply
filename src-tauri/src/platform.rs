@@ -18,11 +18,7 @@ pub struct MonitorGeom {
 fn geom(m: &Monitor, index: usize) -> MonitorGeom {
     let width = m.width().unwrap_or(1) as f64;
     let height = m.height().unwrap_or(1) as f64;
-    let capture_scale = m
-        .capture_image()
-        .map(|img| img.width() as f64 / width)
-        .unwrap_or(1.0)
-        .max(0.1);
+    let capture_scale = f64::from(m.scale_factor().unwrap_or(1.0)).max(0.1);
     MonitorGeom {
         id: m.id().unwrap_or(index as u32),
         x: m.x().unwrap_or(0) as f64,
@@ -33,13 +29,12 @@ fn geom(m: &Monitor, index: usize) -> MonitorGeom {
     }
 }
 
-pub fn monitor_geoms() -> Result<Vec<MonitorGeom>, String> {
-    let monitors = Monitor::all().map_err(describe_capture_error)?;
-    Ok(monitors
+pub fn monitor_geoms_for(monitors: &[Monitor]) -> Vec<MonitorGeom> {
+    monitors
         .iter()
         .enumerate()
         .map(|(i, m)| geom(m, i))
-        .collect())
+        .collect()
 }
 
 pub fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, String> {

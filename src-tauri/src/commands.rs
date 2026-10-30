@@ -22,8 +22,13 @@ pub fn overlay_snapshot(app: AppHandle, monitor_id: u32) -> Result<OverlaySnapsh
 }
 
 #[tauri::command]
-pub fn overlay_image(app: AppHandle, monitor_id: u32) -> Vec<u8> {
-    crate::overlay::overlay_image(&app, monitor_id).unwrap_or_default()
+pub fn overlay_ready(app: AppHandle, monitor_id: u32) {
+    crate::overlay::overlay_ready(&app, monitor_id);
+}
+
+#[tauri::command]
+pub fn overlay_image(app: AppHandle, monitor_id: u32) -> Result<tauri::ipc::Response, String> {
+    crate::overlay::overlay_image(&app, monitor_id).map(tauri::ipc::Response::new)
 }
 
 #[tauri::command]

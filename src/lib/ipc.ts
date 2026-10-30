@@ -22,11 +22,11 @@ export const api = {
 
   overlaySnapshot: (monitorId: number) =>
     invoke<OverlaySnapshot>("overlay_snapshot", { monitorId }),
+  overlayReady: (monitorId: number) => invoke<void>("overlay_ready", { monitorId }),
 
-  /** Monitor screenshot encoded as PNG in physical pixels. */
+  /** Monitor screenshot as raw RGBA with an 8-byte width/height header. */
   overlayImage: async (monitorId: number) => {
-    const bytes = await invoke<number[] | Uint8Array>("overlay_image", { monitorId });
-    return new Uint8Array(bytes);
+    return new Uint8Array(await invoke<ArrayBuffer>("overlay_image", { monitorId }));
   },
 
   windowsUnderCursor: (monitorId: number, x: number, y: number) =>

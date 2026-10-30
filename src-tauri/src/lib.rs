@@ -54,6 +54,7 @@ pub fn run() {
             commands::start_capture,
             commands::cancel_capture,
             commands::overlay_snapshot,
+            commands::overlay_ready,
             commands::overlay_image,
             commands::cursor_location,
             commands::windows_under_cursor,
@@ -91,22 +92,45 @@ pub fn run() {
                 log::warn!("failed to apply Dock visibility: {error}");
             }
             settings_window::register_on_start(&handle);
+            #[cfg(target_os = "macos")]
+            if !platform::has_screen_permission() {
+                let permission_handle = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let _ = permission_handle.run_on_main_thread(|| {
+                        if !platform::has_screen_permission() {
+                            platform::request_screen_permission();
+                        }
+                    });
+                });
+            }
+            let prewarm_handle = handle.clone();
+            std::thread::spawn(move || {
+                // Warm the WebViews after startup without blocking app launch.
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let main_handle = prewarm_handle.clone();
+                let _ = prewarm_handle.run_on_main_thread(move || {
+                    if let Err(error) = overlay::prewarm(&main_handle) {
+                        log::warn!("overlay prewarm failed: {error}");
+                    }
+                });
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
             let WindowEvent::Destroyed = event else {
                 return;
             };
-            // 下一次编辑会话前清理过期的待处理帧。
-            // 保留 last_shot，因为编辑器可能仍在使用它。
             if window.label().starts_with(overlay::OVERLAY_PREFIX) {
-                window
-                    .app_handle()
-                    .state::<AppState>()
-                    .pending
-                    .lock()
-                    .unwrap()
-                    .clear();
+                if let Some(monitor_id) = overlay::monitor_id_from_label(window.label()) {
+                    window
+                        .app_handle()
+                        .state::<AppState>()
+                        .ready_overlays
+                        .lock()
+                        .unwrap()
+                        .remove(&monitor_id);
+                }
             }
             if matches!(window.label(), "main" | "settings") {
                 let _ = settings_window::refresh_dock_visibility(window.app_handle());
