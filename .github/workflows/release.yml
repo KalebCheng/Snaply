@@ -276,6 +276,46 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Set final release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          previous_tag="$(
+            git tag --sort=-version:refname |
+              awk -v current="$TAG" '$0 != current { print; exit }'
+          )"
+
+          api_args=(--method POST "repos/$GH_REPO/releases/generate-notes" -f "tag_name=$TAG")
+          if [[ -n "$previous_tag" ]]; then
+            api_args+=(-f "previous_tag_name=$previous_tag")
+          fi
+          generated="$(gh api "${api_args[@]}" --jq '.body')"
+
+          range="$TAG"
+          if [[ -n "$previous_tag" ]]; then
+            range="$previous_tag..$TAG"
+          fi
+          commits="$(git log "$range" --no-merges --pretty=format:'- %s (`%h`)')"
+
+          notes="$generated"
+          if [[ -n "$commits" ]]; then
+            notes+=$'\n\n## Commits\n\n'
+            notes+="$commits"
+          fi
+
+          gh release edit "$TAG" --notes "$notes"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
