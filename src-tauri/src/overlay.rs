@@ -2,8 +2,8 @@
 use objc2::{sel, MainThreadMarker};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSScreenSaverWindowLevel,
-    NSWindow, NSWorkspace, NSWorkspaceOpenConfiguration,
+    NSApplication, NSApplicationActivationPolicy, NSRunningApplication, NSScreenSaverWindowLevel,
+    NSWindow,
 };
 #[cfg(target_os = "macos")]
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -11,8 +11,6 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGDisplayBounds, CGEventSource, CGEventSourceStateID, CGMainDisplayID, CGMouseButton,
 };
-#[cfg(target_os = "macos")]
-use objc2_foundation::NSBundle;
 use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -58,27 +56,6 @@ fn configure_overlay_window(window: &tauri::WebviewWindow, monitor: &MonitorInfo
 }
 
 #[cfg(target_os = "macos")]
-fn activate_via_launch_services() {
-    let bundle_url = NSBundle::mainBundle().bundleURL();
-    let workspace = NSWorkspace::sharedWorkspace();
-    let supports_configuration: bool = unsafe {
-        objc2::msg_send![
-            &*workspace,
-            respondsToSelector: sel!(openApplicationAtURL:configuration:completionHandler:)
-        ]
-    };
-    if supports_configuration {
-        let config = NSWorkspaceOpenConfiguration::configuration();
-        config.setActivates(true);
-        config.setCreatesNewApplicationInstance(false);
-        config.setAddsToRecentItems(false);
-        workspace.openApplicationAtURL_configuration_completionHandler(&bundle_url, &config, None);
-    } else {
-        workspace.openURL(&bundle_url);
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn activate_overlay_window(window: &tauri::WebviewWindow) {
     let Ok(ptr) = window.ns_window() else {
         return;
@@ -86,29 +63,23 @@ fn activate_overlay_window(window: &tauri::WebviewWindow) {
     let ns_window = unsafe { &*(ptr.cast::<NSWindow>()) };
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
-    let running = NSRunningApplication::currentApplication();
+    let dock_visible = window
+        .app_handle()
+        .state::<AppState>()
+        .dock_visible
+        .load(Ordering::SeqCst);
+    if !dock_visible {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    }
 
-    // A Dock-less (UIElement) app does not automatically become active when a
-    // global shortcut orders its window front. `activateIgnoringOtherApps:` is
-    // a no-op on current macOS releases, so use the modern activation API when
-    // available and then make the overlay the actual key window.
-    #[allow(deprecated)]
-    app.activateIgnoringOtherApps(true);
+    // A Dock-less app does not become active automatically when a global
+    // shortcut orders its window front. Keep it an Accessory app and use the
+    // modern activation API so no Dock icon is introduced.
     let supports_activate: bool =
         unsafe { objc2::msg_send![&*app, respondsToSelector: sel!(activate)] };
     if supports_activate {
         app.activate();
     }
-    #[allow(deprecated)]
-    let activated = running.activateWithOptions(
-        NSApplicationActivationOptions::ActivateAllWindows
-            | NSApplicationActivationOptions::ActivateIgnoringOtherApps,
-    );
-    // LaunchServices activation is the path that also works for LSUIElement
-    // apps. `NSApplication.activate` alone is denied when the source is a
-    // background timer or global shortcut.
-    activate_via_launch_services();
-    let _ = activated;
     ns_window.makeKeyAndOrderFront(None);
     ns_window.orderFrontRegardless();
 
@@ -126,7 +97,14 @@ fn activate_overlay_window(window: &tauri::WebviewWindow) {
             let delayed_window = unsafe { &*(ptr.cast::<NSWindow>()) };
             let mtm = unsafe { MainThreadMarker::new_unchecked() };
             let delayed_app = NSApplication::sharedApplication(mtm);
-            activate_via_launch_services();
+            if !delayed
+                .app_handle()
+                .state::<AppState>()
+                .dock_visible
+                .load(Ordering::SeqCst)
+            {
+                delayed_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+            }
             delayed_app.activate();
             delayed_window.makeKeyAndOrderFront(None);
             let _ = delayed.set_focus();
