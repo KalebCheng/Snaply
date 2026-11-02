@@ -1,6 +1,6 @@
 [package]
 name = "snaply"
-version = "0.1.5"
+version = "0.1.6"
 description = "Snaply - cross-platform screenshot & annotation tool"
 authors = ["Snaply"]
 license = "MIT"
@@ -32,9 +32,11 @@ env_logger = "0.11"
 
 # 直接用 objc2 的 CG 绑定：与 tauri / xcap 已经拉进来的版本共用，不额外引入 objc 运行时。
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSWindow"] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSResponder", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
 objc2-core-foundation = { version = "0.3.2", features = ["CFArray", "CFData", "CFDictionary", "CFNumber", "CFString"] }
-objc2-core-graphics = { version = "0.3.2", features = ["CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventTypes", "CGImage", "CGWindow"] }
+objc2-core-graphics = { version = "0.3.2", features = ["CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSURL"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

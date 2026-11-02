@@ -30,6 +30,13 @@ type Drag =
   | { kind: "shapeMove"; id: string; origin: Point; start: Shape }
   | { kind: "crop"; origin: Point; current: Rect };
 
+type NativePointer = {
+  monitorId: number;
+  phase: "down" | "move" | "up";
+  x: number;
+  y: number;
+};
+
 const TOOLS: { id: ToolId; hint: string }[] = [
   { id: "select", hint: "V" },
   { id: "rect", hint: "R" },
@@ -91,12 +98,16 @@ export function Overlay() {
 
   const baseRef = useRef<HTMLCanvasElement>(null);
   const artRef = useRef<HTMLCanvasElement>(null);
+  const inputRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const presetAtDownRef = useRef<WindowHit | null>(null);
   const commitLockRef = useRef(false);
   const sessionRef = useRef<number | null>(null);
   const cursorRef = useRef<Point | null>(cursor);
   cursorRef.current = cursor;
+  const nativePressRef = useRef(false);
+  const physicalPressRef = useRef(false);
+  const nativeDispatchRef = useRef(false);
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const styleRef = useRef({ color, strokeWidth, fontSize });
@@ -202,6 +213,62 @@ export function Overlay() {
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [monitorId, syncSettings]);
+
+  // AppKit may leave a transparent UIElement overlay visible but non-key. Rust
+  // forwards global button phases in that state; replay them on the overlay
+  // input surface without requiring a trusted WKWebView pointer event.
+  useEffect(() => {
+    if (!isTauri() || monitorId == null) return;
+    let unlisten: UnlistenFn | null = null;
+    let disposed = false;
+    void listen<NativePointer>("overlay-native-pointer", ({ payload }) => {
+      if (payload.monitorId !== monitorId) return;
+      if (payload.phase === "down") {
+        if (nativePressRef.current || physicalPressRef.current) return;
+        const target = document.elementFromPoint(payload.x, payload.y);
+        if (!target?.classList.contains("ov-input")) return;
+        nativePressRef.current = true;
+      } else if (!nativePressRef.current) {
+        return;
+      }
+
+      const input = inputRef.current;
+      if (!input) {
+        nativePressRef.current = false;
+        return;
+      }
+      const type =
+        payload.phase === "down"
+          ? "pointerdown"
+          : payload.phase === "move"
+            ? "pointermove"
+            : "pointerup";
+      nativeDispatchRef.current = true;
+      input.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: payload.x,
+          clientY: payload.y,
+          button: 0,
+          buttons: payload.phase === "up" ? 0 : 1,
+          pointerId: 91,
+          pointerType: "mouse",
+          isPrimary: true,
+        }),
+      );
+      nativeDispatchRef.current = false;
+      if (payload.phase === "up") nativePressRef.current = false;
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [monitorId]);
 
   // 未获得焦点的覆盖层可能收不到鼠标事件。每个覆盖层主动轮询全局光标，
   // 这样从 A 屏移动到 B 屏时，两边都能及时更新本地坐标和窗口命中结果。
@@ -372,6 +439,8 @@ export function Overlay() {
   };
 
   const resetAll = () => {
+    nativePressRef.current = false;
+    physicalPressRef.current = false;
     setMode("select");
     setSel(null);
     setShapes([]);
@@ -560,11 +629,17 @@ export function Overlay() {
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (nativePressRef.current && !nativeDispatchRef.current) return;
     // Do not start interaction before the screenshot is decoded.
     if (!image || busy || e.button !== 0 || textInput) return;
     const p = pointOf(e);
     if (!p) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (!nativeDispatchRef.current) physicalPressRef.current = true;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Synthetic fallback events do not own a native pointer capture.
+    }
 
     if (mode === "select") {
       // Use a hovered window for a click, or a free selection when dragging.
@@ -615,6 +690,7 @@ export function Overlay() {
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (nativePressRef.current && !nativeDispatchRef.current) return;
     const p = pointOf(e);
     if (!p) return;
     if (!isTauri()) setCursor(p);
@@ -658,6 +734,11 @@ export function Overlay() {
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (nativePressRef.current && !nativeDispatchRef.current) {
+      physicalPressRef.current = false;
+      return;
+    }
+    if (!nativeDispatchRef.current) physicalPressRef.current = false;
     const d = drag;
     setDrag(null);
     if (!d) return;
@@ -976,12 +1057,17 @@ export function Overlay() {
         ))}
 
       <div
+        ref={inputRef}
         className="ov-input"
         style={{ cursor: mode === "select" ? "none" : cursorFor(mode, tool, cursor, liveSel) }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => setDrag(null)}
+        onPointerCancel={() => {
+          nativePressRef.current = false;
+          physicalPressRef.current = false;
+          setDrag(null);
+        }}
         onDragStart={(e) => e.preventDefault()}
       />
 

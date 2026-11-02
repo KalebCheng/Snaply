@@ -1,5 +1,8 @@
 use std::collections::HashSet;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc, Mutex,
+};
 
 use crate::overlay::MonitorInfo;
 use crate::platform::MonitorGeom;
@@ -49,6 +52,8 @@ pub struct AppState {
     pub last_shot: Mutex<Option<ShotImage>>,
     /// Prevent repeated hotkey presses from stacking overlay sessions.
     pub capture_lock: AtomicBool,
+    /// Invalidates native pointer pollers when an overlay session closes.
+    pub overlay_generation: AtomicU64,
     pub pending: Mutex<PendingCapture>,
     /// Monitor ids whose prewarmed overlay WebView has finished loading.
     pub ready_overlays: Mutex<HashSet<u32>>,
@@ -67,6 +72,7 @@ impl AppState {
             settings: Mutex::new(Settings::default()),
             last_shot: Mutex::new(None),
             capture_lock: AtomicBool::new(false),
+            overlay_generation: AtomicU64::new(0),
             pending: Mutex::new(PendingCapture::new()),
             ready_overlays: Mutex::new(HashSet::new()),
             last_edit_path: Mutex::new(None),

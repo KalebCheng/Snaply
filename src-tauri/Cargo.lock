@@ -4398,14 +4398,16 @@ checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "snaply"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "env_logger",
  "image",
  "log",
+ "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "objc2-foundation",
  "reqwest",
  "semver",
  "serde",

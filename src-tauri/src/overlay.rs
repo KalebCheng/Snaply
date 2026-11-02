@@ -1,9 +1,18 @@
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSScreenSaverWindowLevel, NSWindow};
+use objc2::{sel, MainThreadMarker};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSScreenSaverWindowLevel,
+    NSWindow, NSWorkspace, NSWorkspaceOpenConfiguration,
+};
 #[cfg(target_os = "macos")]
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 #[cfg(target_os = "macos")]
-use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID};
+use objc2_core_graphics::{
+    CGDisplayBounds, CGEventSource, CGEventSourceStateID, CGMainDisplayID, CGMouseButton,
+};
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSBundle;
 use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -48,6 +57,179 @@ fn configure_overlay_window(window: &tauri::WebviewWindow, monitor: &MonitorInfo
     }
 }
 
+#[cfg(target_os = "macos")]
+fn activate_via_launch_services() {
+    let bundle_url = NSBundle::mainBundle().bundleURL();
+    let workspace = NSWorkspace::sharedWorkspace();
+    let supports_configuration: bool = unsafe {
+        objc2::msg_send![
+            &*workspace,
+            respondsToSelector: sel!(openApplicationAtURL:configuration:completionHandler:)
+        ]
+    };
+    if supports_configuration {
+        let config = NSWorkspaceOpenConfiguration::configuration();
+        config.setActivates(true);
+        config.setCreatesNewApplicationInstance(false);
+        config.setAddsToRecentItems(false);
+        workspace.openApplicationAtURL_configuration_completionHandler(&bundle_url, &config, None);
+    } else {
+        workspace.openURL(&bundle_url);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn activate_overlay_window(window: &tauri::WebviewWindow) {
+    let Ok(ptr) = window.ns_window() else {
+        return;
+    };
+    let ns_window = unsafe { &*(ptr.cast::<NSWindow>()) };
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
+    let running = NSRunningApplication::currentApplication();
+
+    // A Dock-less (UIElement) app does not automatically become active when a
+    // global shortcut orders its window front. `activateIgnoringOtherApps:` is
+    // a no-op on current macOS releases, so use the modern activation API when
+    // available and then make the overlay the actual key window.
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+    let supports_activate: bool =
+        unsafe { objc2::msg_send![&*app, respondsToSelector: sel!(activate)] };
+    if supports_activate {
+        app.activate();
+    }
+    #[allow(deprecated)]
+    let activated = running.activateWithOptions(
+        NSApplicationActivationOptions::ActivateAllWindows
+            | NSApplicationActivationOptions::ActivateIgnoringOtherApps,
+    );
+    // LaunchServices activation is the path that also works for LSUIElement
+    // apps. `NSApplication.activate` alone is denied when the source is a
+    // background timer or global shortcut.
+    activate_via_launch_services();
+    let _ = activated;
+    ns_window.makeKeyAndOrderFront(None);
+    ns_window.orderFrontRegardless();
+
+    // Activation is asynchronous. The first `makeKeyAndOrderFront:` above can
+    // race the application becoming active and leave a visible but non-key
+    // overlay; repeat it on the next event-loop turn.
+    let delayed = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(180));
+        let handle = delayed.app_handle().clone();
+        let _ = handle.run_on_main_thread(move || {
+            let Ok(ptr) = delayed.ns_window() else {
+                return;
+            };
+            let delayed_window = unsafe { &*(ptr.cast::<NSWindow>()) };
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let delayed_app = NSApplication::sharedApplication(mtm);
+            activate_via_launch_services();
+            delayed_app.activate();
+            delayed_window.makeKeyAndOrderFront(None);
+            let _ = delayed.set_focus();
+        });
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn request_overlay_focus(app: &AppHandle, monitor_id: u32) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window(&overlay_label(monitor_id)) {
+            activate_overlay_window(&window);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn emit_native_pointer(
+    window: &WebviewWindow,
+    geoms: &[MonitorGeom],
+    phase: &'static str,
+    x: f64,
+    y: f64,
+) {
+    let Some(monitor) = monitor_at_point(geoms, x, y) else {
+        return;
+    };
+    let _ = window.emit(
+        "overlay-native-pointer",
+        NativePointerEvent {
+            monitor_id: monitor.id,
+            phase,
+            x: x - monitor.x,
+            y: y - monitor.y,
+        },
+    );
+}
+
+/// Forward global left-button phases to the overlay.
+///
+/// The frozen desktop and cursor hit-testing can still render when macOS
+/// refuses activation for a Dock-less app. In that state AppKit does not route
+/// mouse events into the WKWebView, so polling the global button state is the
+/// reliable input path.
+#[cfg(target_os = "macos")]
+fn start_pointer_bridge(app: &AppHandle, generation: u64, geoms: Vec<MonitorGeom>) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let mut was_down = CGEventSource::button_state(
+            CGEventSourceStateID::CombinedSessionState,
+            CGMouseButton::Left,
+        );
+        let mut press_monitor = None;
+        while handle
+            .state::<AppState>()
+            .overlay_generation
+            .load(Ordering::SeqCst)
+            == generation
+        {
+            let Some((x, y)) = platform::cursor_position() else {
+                std::thread::sleep(std::time::Duration::from_millis(12));
+                continue;
+            };
+            let is_down = CGEventSource::button_state(
+                CGEventSourceStateID::CombinedSessionState,
+                CGMouseButton::Left,
+            );
+            if is_down && !was_down {
+                press_monitor = monitor_at_point(&geoms, x, y).map(|monitor| monitor.id);
+                if let Some(monitor_id) = press_monitor {
+                    if let Some(window) = handle.get_webview_window(&overlay_label(monitor_id)) {
+                        emit_native_pointer(&window, &geoms, "down", x, y);
+                    }
+                    if !NSRunningApplication::currentApplication().isActive() {
+                        request_overlay_focus(&handle, monitor_id);
+                    }
+                }
+            } else if is_down && was_down {
+                if let Some(monitor_id) = press_monitor {
+                    if let Some(window) = handle.get_webview_window(&overlay_label(monitor_id)) {
+                        emit_native_pointer(&window, &geoms, "move", x, y);
+                    }
+                }
+            } else if !is_down && was_down {
+                if let Some(monitor_id) = press_monitor.take() {
+                    if let Some(window) = handle.get_webview_window(&overlay_label(monitor_id)) {
+                        emit_native_pointer(&window, &geoms, "up", x, y);
+                    }
+                }
+            }
+            was_down = is_down;
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_pointer_bridge(_app: &AppHandle, _generation: u64, _geoms: Vec<MonitorGeom>) {}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_overlay_window(_window: &tauri::WebviewWindow) {}
+
 #[cfg(not(target_os = "macos"))]
 fn configure_overlay_window(window: &tauri::WebviewWindow, monitor: &MonitorInfo) {
     let _ = window.set_position(LogicalPosition::new(monitor.x, monitor.y));
@@ -84,6 +266,15 @@ pub struct OverlaySnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct CursorLocation {
     pub monitor_id: u32,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativePointerEvent {
+    pub monitor_id: u32,
+    pub phase: &'static str,
     pub x: f64,
     pub y: f64,
 }
@@ -169,6 +360,9 @@ pub(crate) fn monitor_id_from_label(label: &str) -> Option<u32> {
 }
 
 pub fn hide_overlays(app: &AppHandle) {
+    app.state::<AppState>()
+        .overlay_generation
+        .fetch_add(1, Ordering::SeqCst);
     for (label, window) in app.webview_windows() {
         if label.starts_with(OVERLAY_PREFIX) {
             let _ = window.emit("overlay-reset", ());
@@ -423,7 +617,7 @@ fn begin_inner(app: &AppHandle) -> Result<(), String> {
         let mut pending = state.pending.lock().unwrap();
         pending.frames_by_id = frames;
         pending.monitors = infos.clone();
-        pending.geoms = geoms;
+        pending.geoms = geoms.clone();
         pending.started_at_ms = started_at_ms;
     }
 
@@ -447,10 +641,17 @@ fn begin_inner(app: &AppHandle) -> Result<(), String> {
             let _ = window.emit("overlay-refresh", started_at_ms);
         }
         if should_focus {
-            // Focus explicitly so keyboard commands reach the overlay.
+            // Focus explicitly so pointer and keyboard commands reach the overlay.
+            activate_overlay_window(&window);
             let _ = window.set_focus();
         }
     }
+    let generation = app
+        .state::<AppState>()
+        .overlay_generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    start_pointer_bridge(app, generation, geoms);
     Ok(())
 }
 
