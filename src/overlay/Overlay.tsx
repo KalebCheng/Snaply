@@ -77,6 +77,7 @@ export function Overlay() {
   const [magnifierOn] = useState(true);
 
   const [mode, setMode] = useState<"select" | "edit">("select");
+  const [spaceChanging, setSpaceChanging] = useState(false);
   const [tool, setTool] = useState<ToolId>("select");
   const [shapes, setShapes] = useState<Shape[]>([]);
   const [draftShape, setDraftShape] = useState<Shape | null>(null);
@@ -110,6 +111,8 @@ export function Overlay() {
   const nativeDispatchRef = useRef(false);
   const toolRef = useRef(tool);
   toolRef.current = tool;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   const styleRef = useRef({ color, strokeWidth, fontSize });
   styleRef.current = { color, strokeWidth, fontSize };
 
@@ -177,6 +180,7 @@ export function Overlay() {
         sessionRef.current = payload;
         try {
           resetAll();
+          setSpaceChanging(false);
           setError(null);
           void syncSettings().catch(() => undefined);
           const next = await decodeOverlayFrame(await api.overlayImage(monitorId));
@@ -195,6 +199,13 @@ export function Overlay() {
           previous?.close();
           return null;
         });
+      }),
+      listen("overlay-space-changing", () => {
+        // Keep the current frozen frame dimmed while macOS finishes switching
+        // Spaces; Rust replaces it with a fresh frame after the transition.
+        setSpaceChanging(true);
+        resetAll();
+        setHover(null);
       }),
     ]).then(async (registered) => {
       if (disposed) {
@@ -224,10 +235,10 @@ export function Overlay() {
     void listen<NativePointer>("overlay-native-pointer", ({ payload }) => {
       if (payload.monitorId !== monitorId) return;
       if (payload.phase === "down") {
-        if (nativePressRef.current || physicalPressRef.current) return;
         const target = document.elementFromPoint(payload.x, payload.y);
-        if (!target?.classList.contains("ov-input")) return;
+        if (!target?.classList.contains("ov-input") && modeRef.current !== "select") return;
         nativePressRef.current = true;
+        physicalPressRef.current = false;
       } else if (!nativePressRef.current) {
         return;
       }
@@ -235,6 +246,7 @@ export function Overlay() {
       const input = inputRef.current;
       if (!input) {
         nativePressRef.current = false;
+        physicalPressRef.current = false;
         return;
       }
       const type =
@@ -259,7 +271,10 @@ export function Overlay() {
         }),
       );
       nativeDispatchRef.current = false;
-      if (payload.phase === "up") nativePressRef.current = false;
+      if (payload.phase === "up") {
+        nativePressRef.current = false;
+        physicalPressRef.current = false;
+      }
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
@@ -365,7 +380,7 @@ export function Overlay() {
 
   // 窗口命中测试
   useEffect(() => {
-    if (!isTauri() || mode === "edit" || drag || monitorId == null) {
+    if (!isTauri() || mode === "edit" || drag || spaceChanging || monitorId == null) {
       setHover(null);
       return;
     }
@@ -394,7 +409,7 @@ export function Overlay() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [drag, monitorId, mode]);
+  }, [drag, monitorId, mode, spaceChanging]);
 
   // Modifier keys
   useEffect(() => {
@@ -630,6 +645,7 @@ export function Overlay() {
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (nativePressRef.current && !nativeDispatchRef.current) return;
+    if (spaceChanging) return;
     // Do not start interaction before the screenshot is decoded.
     if (!image || busy || e.button !== 0 || textInput) return;
     const p = pointOf(e);

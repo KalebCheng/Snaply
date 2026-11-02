@@ -54,6 +54,10 @@ pub struct AppState {
     pub capture_lock: AtomicBool,
     /// Invalidates native pointer pollers when an overlay session closes.
     pub overlay_generation: AtomicU64,
+    /// Coalesces repeated active-Space notifications into one recapture.
+    pub space_change_generation: AtomicU64,
+    /// Prevents activation feedback from immediately recapturing again.
+    pub last_space_recapture_ms: AtomicU64,
     pub pending: Mutex<PendingCapture>,
     /// Monitor ids whose prewarmed overlay WebView has finished loading.
     pub ready_overlays: Mutex<HashSet<u32>>,
@@ -73,6 +77,8 @@ impl AppState {
             last_shot: Mutex::new(None),
             capture_lock: AtomicBool::new(false),
             overlay_generation: AtomicU64::new(0),
+            space_change_generation: AtomicU64::new(0),
+            last_space_recapture_ms: AtomicU64::new(0),
             pending: Mutex::new(PendingCapture::new()),
             ready_overlays: Mutex::new(HashSet::new()),
             last_edit_path: Mutex::new(None),

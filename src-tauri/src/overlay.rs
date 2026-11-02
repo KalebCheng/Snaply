@@ -3,7 +3,7 @@ use objc2::{sel, MainThreadMarker};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSRunningApplication, NSScreenSaverWindowLevel,
-    NSWindow,
+    NSWindow, NSWindowCollectionBehavior, NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification,
 };
 #[cfg(target_os = "macos")]
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -11,7 +11,11 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGDisplayBounds, CGEventSource, CGEventSourceStateID, CGMainDisplayID, CGMouseButton,
 };
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSNotification;
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
+use std::ptr::NonNull;
 use std::sync::{atomic::Ordering, Arc};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 #[cfg(not(target_os = "macos"))]
@@ -43,6 +47,11 @@ fn configure_overlay_window(window: &tauri::WebviewWindow, monitor: &MonitorInfo
     if let Ok(ptr) = window.ns_window() {
         let ns_window = unsafe { &*(ptr.cast::<NSWindow>()) };
         ns_window.setLevel(NSScreenSaverWindowLevel);
+        // Capture overlays must survive a Space switch. Otherwise the frozen
+        // image can remain visible on the old Space while the newly selected
+        // Space has no interactive overlay window.
+        let behavior = ns_window.collectionBehavior();
+        ns_window.setCollectionBehavior(behavior | NSWindowCollectionBehavior::CanJoinAllSpaces);
         // Non-key overlay windows still need mouse-move events for hover
         // detection and the magnifier when the cursor crosses displays.
         ns_window.setAcceptsMouseMovedEvents(true);
@@ -350,6 +359,81 @@ pub fn hide_overlays(app: &AppHandle) {
     }
 }
 
+/// Re-freeze every display after the active macOS Space changes.
+///
+/// A screenshot overlay belongs to the desktop contents that existed when the
+/// session began. Keeping the old frozen image over a different Space makes
+/// window highlighting and drawing appear out of sync, so restart the capture
+/// once the new Space has settled.
+#[cfg(target_os = "macos")]
+pub fn watch_space_changes(app: &AppHandle) {
+    let handle = app.clone();
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    let block = block2::RcBlock::new(move |_notification: NonNull<NSNotification>| {
+        let state = handle.state::<AppState>();
+        if state.pending.lock().unwrap().started_at_ms == 0 {
+            return;
+        }
+        if now_ms().saturating_sub(state.last_space_recapture_ms.load(Ordering::SeqCst)) < 1_200 {
+            return;
+        }
+        let generation = state.space_change_generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // Keep the dimmed frozen frame visible across the Space transition,
+        // but clear any selection, toolbar, and magnifier state immediately.
+        for window in handle.webview_windows().into_values() {
+            if window.label().starts_with(OVERLAY_PREFIX) {
+                let _ = window.emit("overlay-space-changing", ());
+            }
+        }
+
+        let recapture = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(320));
+            let state = recapture.state::<AppState>();
+            if state.space_change_generation.load(Ordering::SeqCst) != generation
+                || state.pending.lock().unwrap().started_at_ms == 0
+            {
+                return;
+            }
+            state
+                .last_space_recapture_ms
+                .store(now_ms(), Ordering::SeqCst);
+            let hide_handle = recapture.clone();
+            let _ = recapture.run_on_main_thread(move || {
+                hide_overlays(&hide_handle);
+                let capture_handle = hide_handle.clone();
+                std::thread::spawn(move || {
+                    // Let the compositor remove the old overlay before the
+                    // new frame is captured, otherwise selection UI is frozen
+                    // into the screenshot as ghost artifacts.
+                    std::thread::sleep(std::time::Duration::from_millis(160));
+                    let state = capture_handle.state::<AppState>();
+                    if state.space_change_generation.load(Ordering::SeqCst) != generation
+                        || state.pending.lock().unwrap().started_at_ms == 0
+                    {
+                        return;
+                    }
+                    let final_handle = capture_handle.clone();
+                    let _ = capture_handle.run_on_main_thread(move || {
+                        let _ = begin(&final_handle);
+                    });
+                });
+            });
+        });
+    });
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceActiveSpaceDidChangeNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    std::mem::forget(block);
+    std::mem::forget(observer);
+}
+
 fn monitor_at_point(geoms: &[MonitorGeom], x: f64, y: f64) -> Option<&MonitorGeom> {
     geoms
         .iter()
@@ -412,6 +496,7 @@ fn create_overlay_window(app: &AppHandle, monitor: &MonitorInfo) -> Result<Webvi
         .transparent(true)
         .shadow(false)
         .always_on_top(true)
+        .visible_on_all_workspaces(true)
         .resizable(false)
         .skip_taskbar(true)
         .visible(false)

@@ -86,6 +86,8 @@ pub fn run() {
             if let Err(e) = tray::build(&handle) {
                 log::error!("tray init failed: {e}");
             }
+            #[cfg(target_os = "macos")]
+            overlay::watch_space_changes(&handle);
             let saved = settings::load(&handle);
             *app.state::<AppState>().settings.lock().unwrap() = saved.clone();
             if let Err(error) = settings_window::refresh_dock_visibility(&handle) {
