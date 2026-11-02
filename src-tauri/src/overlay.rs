@@ -270,6 +270,7 @@ pub struct CursorLocation {
     pub y: f64,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativePointerEvent {
