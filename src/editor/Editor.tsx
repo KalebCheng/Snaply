@@ -61,7 +61,9 @@ export function Editor({
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
   const [cursor, setCursor] = useState<Point | null>(null);
   const [draft, setDraft] = useState<Shape | null>(null);
-  const [textDraft, setTextDraft] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [textDraft, setTextDraft] = useState<
+    { x: number; y: number; value: string; editingId?: string } | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [savedPath, setSavedPath] = useState(initialPath);
@@ -73,6 +75,7 @@ export function Editor({
     | { kind: "shape"; origin: Point }
     | { kind: "move"; id: string; origin: Point; start: Shape }
     | { kind: "crop"; origin: Point }
+    | { kind: "text"; origin: Point; editingId?: string }
     | { kind: "pan"; origin: Point; start: Point }
     | null
   >(null);
@@ -82,7 +85,6 @@ export function Editor({
     () => (crop ? { width: crop.width, height: crop.height } : { width: image.width, height: image.height }),
     [crop, image],
   );
-
   useEffect(() => {
     const onResize = () => setStageSize({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener("resize", onResize);
@@ -140,7 +142,7 @@ export function Editor({
     const ox = crop?.x ?? 0;
     const oy = crop?.y ?? 0;
     ctx.translate(-ox, -oy);
-    const visible = shapes.filter((s) => !isOutside(s, crop));
+    const visible = shapes.filter((s) => s.id !== textDraft?.editingId && !isOutside(s, crop));
     drawShapeList(ctx, visible, image, draft, {
       x: ox,
       y: oy,
@@ -148,7 +150,7 @@ export function Editor({
       height: natural.height,
     });
     if (selectedId) drawSelectionFrame(ctx, visible.find((s) => s.id === selectedId), zoom);
-  }, [image, shapes, draft, crop, natural, zoom, selectedId]);
+  }, [image, shapes, draft, crop, natural, zoom, selectedId, textDraft?.editingId]);
 
   // Undo and redo
   useEffect(() => {
@@ -181,6 +183,27 @@ export function Editor({
     setShapes((prev) => prev.filter((s) => s.id !== selectedId));
     setSelectedId(null);
   }, [selectedId]);
+
+  const updateSelectedColor = (next: string) => {
+    setColor(next);
+    setShapes((prev) => prev.map((shape) => (shape.id === selectedId ? { ...shape, color: next } : shape)));
+  };
+
+  const updateSelectedStroke = (next: number) => {
+    setStrokeWidth(next);
+    setShapes((prev) =>
+      prev.map((shape) => (shape.id === selectedId ? { ...shape, strokeWidth: next } : shape)),
+    );
+  };
+
+  const updateSelectedFontSize = (next: number) => {
+    setFontSize(next);
+    setShapes((prev) =>
+      prev.map((shape) =>
+        shape.id === selectedId && shape.kind === "text" ? { ...shape, fontSize: next } : shape,
+      ),
+    );
+  };
 
   // Export actions
   const showToast = (text: string, action?: Toast["action"]) => {
@@ -282,9 +305,10 @@ export function Editor({
     return { x, y };
   };
 
-
   // Pointer interaction
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Let the active textarea blur and commit instead of starting a new annotation.
+    if (textDraft) return;
     if (e.button === 0 || e.button === 1) e.currentTarget.setPointerCapture(e.pointerId);
     if (e.button === 1 || e.altKey) {
       gesture.current = { kind: "pan", origin: { x: e.clientX, y: e.clientY }, start: offset };
@@ -298,7 +322,14 @@ export function Editor({
       const hit = hitShape([...shapes].reverse(), p);
       setSelectedId(hit?.id ?? null);
       if (hit) {
-        gesture.current = { kind: "move", id: hit.id, origin: p, start: hit };
+        setColor(hit.color);
+        setStrokeWidth(hit.strokeWidth);
+        if (hit.kind === "text") {
+          setFontSize(hit.fontSize);
+          gesture.current = { kind: "text", origin: p, editingId: hit.id };
+        } else {
+          gesture.current = { kind: "move", id: hit.id, origin: p, start: hit };
+        }
       }
       return;
     }
@@ -308,7 +339,7 @@ export function Editor({
       return;
     }
     if (active === "text") {
-      setTextDraft({ x: p.x, y: p.y, value: "" });
+      gesture.current = { kind: "text", origin: p };
       return;
     }
     gesture.current = { kind: "shape", origin: p };
@@ -350,6 +381,13 @@ export function Editor({
       const s = makeDraft(toolRef.current, g.origin, p, { color, strokeWidth });
       setDraft(null);
       if (s && shapeBigEnough(s)) push(s);
+    } else if (g.kind === "text") {
+      const shape = g.editingId ? shapes.find((item) => item.id === g.editingId) : null;
+      setTextDraft(
+        shape?.kind === "text"
+          ? { x: shape.x, y: shape.y, value: shape.text, editingId: shape.id }
+          : { x: g.origin.x, y: g.origin.y, value: "" },
+      );
     } else if (g.kind === "crop") {
       setCropRect((r) => {
         if (!r || r.width < 8 || r.height < 8) return crop;
@@ -369,9 +407,21 @@ export function Editor({
   const commitText = () => {
     if (!textDraft) return;
     const text = textDraft.value.trim();
-    if (text) {
+    if (textDraft.editingId) {
+      const editingId = textDraft.editingId;
+      setShapes((prev) => {
+        if (!text) return prev.filter((shape) => shape.id !== editingId);
+        return prev.map((shape) =>
+          shape.id === editingId && shape.kind === "text"
+            ? { ...shape, text, color, strokeWidth: 1, fontSize }
+            : shape,
+        );
+      });
+      setSelectedId(text ? editingId : null);
+    } else if (text) {
+      const id = uid();
       push({
-        id: uid(),
+        id,
         kind: "text",
         x: textDraft.x,
         y: textDraft.y,
@@ -380,8 +430,10 @@ export function Editor({
         strokeWidth: 1,
         fontSize,
       });
+      setSelectedId(id);
     }
     setTextDraft(null);
+    setTool("select");
   };
 
   // Cursor-centered wheel zoom
@@ -541,9 +593,9 @@ export function Editor({
         strokeWidth={strokeWidth}
         fontSize={fontSize}
         hasSelection={selectedId !== null}
-        onColor={setColor}
-        onStroke={setStrokeWidth}
-        onFontSize={setFontSize}
+        onColor={updateSelectedColor}
+        onStroke={updateSelectedStroke}
+        onFontSize={updateSelectedFontSize}
         onDelete={removeSelected}
       />
 

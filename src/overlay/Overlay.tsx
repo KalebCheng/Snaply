@@ -6,7 +6,7 @@ import { decodeOverlayFrame } from "../lib/decode";
 import { composeExport } from "../lib/export";
 import { drawShapeList } from "../lib/render";
 import { normalizeRect, uid } from "../lib/geometry";
-import type { Language, Point, Rect, Shape, ToolId, WindowHit } from "../types";
+import type { Language, Point, Rect, Shape, TextShape, ToolId, WindowHit } from "../types";
 import { Magnifier } from "./Magnifier";
 import { overlayTranslations, type OverlayCopy } from "./i18n";
 import {
@@ -80,10 +80,14 @@ export function Overlay() {
   const [watermarkText, setWatermarkText] = useState("Snaply");
   const [watermarkFontSize, setWatermarkFontSize] = useState(48);
   const [watermarkOpacity, setWatermarkOpacity] = useState(0.25);
-  const [textInput, setTextInput] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [textInput, setTextInput] = useState<
+    { x: number; y: number; value: string; editingId?: string } | null
+  >(null);
   const [copyAfterCapture, setCopyAfterCapture] = useState(false);
   const [language, setLanguage] = useState<Language>("zh-CN");
   const copy = overlayTranslations[language];
+  const selectedShape = selectedId ? shapes.find((shape) => shape.id === selectedId) ?? null : null;
+  const editingTextId = textInput?.editingId ?? null;
 
   const baseRef = useRef<HTMLCanvasElement>(null);
   const artRef = useRef<HTMLCanvasElement>(null);
@@ -283,11 +287,14 @@ export function Overlay() {
       mode === "edit" && sel
         ? { x: sel.x * k, y: sel.y * k, width: sel.width * k, height: sel.height * k }
         : undefined;
-    drawShapeList(ctx, shapes, image, draftShape, scope);
-    const selected = shapes.find((s) => s.id === selectedId);
+    const visibleShapes = editingTextId
+      ? shapes.filter((shape) => shape.id !== editingTextId)
+      : shapes;
+    drawShapeList(ctx, visibleShapes, image, draftShape, scope);
+    const selected = visibleShapes.find((s) => s.id === selectedId);
     if (selected) frameShape(ctx, selected, k);
     ctx.restore();
-  }, [image, viewport, shapes, draftShape, selectedId, mode, sel]);
+  }, [image, viewport, shapes, draftShape, selectedId, mode, sel, editingTextId]);
 
   // 窗口命中测试
   useEffect(() => {
@@ -370,6 +377,7 @@ export function Overlay() {
     setShapes([]);
     setDraftShape(null);
     setSelectedId(null);
+    setTextInput(null);
     setHover(null);
     presetAtDownRef.current = null;
     setTool("select");
@@ -399,6 +407,27 @@ export function Overlay() {
   const closeToIdle = () => {
     if (isTauri()) cancel();
     else resetAll();
+  };
+
+  const updateSelectedColor = (next: string) => {
+    setColor(next);
+    setShapes((prev) => prev.map((shape) => (shape.id === selectedId ? { ...shape, color: next } : shape)));
+  };
+
+  const updateSelectedStroke = (next: number) => {
+    setStrokeWidth(next);
+    setShapes((prev) =>
+      prev.map((shape) => (shape.id === selectedId ? { ...shape, strokeWidth: next } : shape)),
+    );
+  };
+
+  const updateSelectedFontSize = (next: number) => {
+    setFontSize(next);
+    setShapes((prev) =>
+      prev.map((shape) =>
+        shape.id === selectedId && shape.kind === "text" ? { ...shape, fontSize: next } : shape,
+      ),
+    );
   };
 
   /** Finish editing, copy directly, or save through the main window. */
@@ -504,6 +533,32 @@ export function Overlay() {
     setHover(null);
   };
 
+  const beginNewSelection = (point: Point, preset: WindowHit | null) => {
+    setMode("select");
+    setSel(null);
+    setShapes([]);
+    setDraftShape(null);
+    setSelectedId(null);
+    setTextInput(null);
+    setHover(null);
+    presetAtDownRef.current = preset;
+    setDrag({ kind: "new", origin: point, current: point });
+  };
+
+  const openTextEditor = (shape: TextShape) => {
+    const scale = image ? image.width / viewport.width : 1;
+    setSelectedId(shape.id);
+    setColor(shape.color);
+    setStrokeWidth(shape.strokeWidth);
+    setFontSize(shape.fontSize);
+    setTextInput({
+      x: shape.x / scale,
+      y: shape.y / scale,
+      value: shape.text,
+      editingId: shape.id,
+    });
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     // Do not start interaction before the screenshot is decoded.
     if (!image || busy || e.button !== 0 || textInput) return;
@@ -521,20 +576,32 @@ export function Overlay() {
         }
       }
       // Capture the hovered window before the pointer moves.
-      presetAtDownRef.current = hover;
-      setSel(null);
-      setDrag({ kind: "new", origin: p, current: p });
+      beginNewSelection(p, hover);
       return;
     }
 
     if (!sel) return;
-    if (p.x < sel.x || p.x > sel.x + sel.width || p.y < sel.y || p.y > sel.y + sel.height) return;
+    const resizing = hitHandle(sel, p);
+    if (resizing) return setDrag({ kind: "resize", handle: resizing, current: sel });
+    if (p.x < sel.x || p.x > sel.x + sel.width || p.y < sel.y || p.y > sel.y + sel.height) {
+      // 编辑态拖出当前选区时，允许直接重新框选，而不是完全无响应。
+      if (toolRef.current === "select") beginNewSelection(p, null);
+      return;
+    }
     const ip = editPoint(p);
     const active = toolRef.current;
     if (active === "select") {
       const hit = [...shapes].reverse().find((s) => shapeHitTest(s, ip, image));
       setSelectedId(hit?.id ?? null);
-      if (hit) setDrag({ kind: "shapeMove", id: hit.id, origin: ip, start: hit });
+      if (hit) {
+        setColor(hit.color);
+        setStrokeWidth(hit.strokeWidth);
+        if (hit.kind === "text") {
+          openTextEditor(hit);
+        } else {
+          setDrag({ kind: "shapeMove", id: hit.id, origin: ip, start: hit });
+        }
+      }
       return;
     }
     if (active === "text") {
@@ -642,14 +709,28 @@ export function Overlay() {
   const commitText = () => {
     if (!textInput) return;
     const text = textInput.value.trim();
-    if (text) {
+    if (textInput.editingId) {
+      const editingId = textInput.editingId;
+      setShapes((prev) => {
+        if (!text) return prev.filter((shape) => shape.id !== editingId);
+        return prev.map((shape) =>
+          shape.id === editingId && shape.kind === "text"
+            ? { ...shape, text, color, strokeWidth: 1, fontSize }
+            : shape,
+        );
+      });
+      setSelectedId(text ? editingId : null);
+    } else if (text) {
       const ip = editPoint({ x: textInput.x, y: textInput.y });
+      const id = uid();
       setShapes((prev) => [
         ...prev,
-        { id: uid(), kind: "text", x: ip.x, y: ip.y, text, color, strokeWidth: 1, fontSize },
+        { id, kind: "text", x: ip.x, y: ip.y, text, color, strokeWidth: 1, fontSize },
       ]);
+      setSelectedId(id);
     }
     setTextInput(null);
+    setTool("select");
   };
 
   // Keyboard shortcuts
@@ -691,11 +772,7 @@ export function Overlay() {
         return;
       }
       if (e.key === "Escape") {
-        if (mode === "edit" && tool !== "select") setTool("select");
-        else if (mode === "edit" && selectedId) setSelectedId(null);
-        else if (mode === "edit") resetAll();
-        else if (sel) setSel(null);
-        else closeToIdle();
+        closeToIdle();
         return;
       }
       if (mode === "edit" && (e.key === "Backspace" || e.key === "Delete") && selectedId) {
@@ -881,9 +958,9 @@ export function Overlay() {
         </div>
       )}
 
-      {mode === "select" &&
-        liveSel &&
+      {liveSel &&
         !drag &&
+        !textInput &&
         (Object.entries(handlePoints(liveSel)) as [Handle, Point][]).map(([key, pt]) => (
           <div
             key={key}
@@ -904,6 +981,7 @@ export function Overlay() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={() => setDrag(null)}
         onDragStart={(e) => e.preventDefault()}
       />
 
@@ -968,11 +1046,11 @@ export function Overlay() {
             if (t !== "select") setSelectedId(null);
           }}
           color={color}
-          onColor={setColor}
+          onColor={updateSelectedColor}
           strokeWidth={strokeWidth}
-          onStroke={setStrokeWidth}
+          onStroke={updateSelectedStroke}
           fontSize={fontSize}
-          onFontSize={setFontSize}
+          onFontSize={updateSelectedFontSize}
           watermarkText={watermarkText}
           watermarkFontSize={watermarkFontSize}
           watermarkOpacity={watermarkOpacity}
@@ -990,12 +1068,13 @@ export function Overlay() {
             updateWatermark({ opacity });
           }}
           hasSelection={!!selectedId}
+          selectedKind={selectedShape?.kind ?? null}
           busy={busy}
           onUndo={() => setShapes((prev) => prev.slice(0, -1))}
           onRedo={() => undefined}
           onCopy={() => commit("copy")}
           onSave={() => commit("save")}
-          onClose={resetAll}
+          onClose={closeToIdle}
           onDone={() => commit("edit")}
         />
       )}
@@ -1018,10 +1097,12 @@ function sameWindowHit(a: WindowHit | null, b: WindowHit | null) {
 }
 
 function cursorFor(mode: "select" | "edit", tool: ToolId, cursor: Point | null, sel: Rect | null) {
+  if (sel && cursor) {
+    const handle = hitHandle(sel, cursor);
+    if (handle) return HANDLE_CURSOR[handle];
+  }
   if (mode === "select") {
     if (sel && cursor) {
-      const h = hitHandle(sel, cursor);
-      if (h) return HANDLE_CURSOR[h];
       if (cursor.x > sel.x && cursor.x < sel.x + sel.width && cursor.y > sel.y && cursor.y < sel.y + sel.height) return "move";
     }
     return "crosshair";
@@ -1226,6 +1307,7 @@ type EditToolbarProps = {
   onWatermarkFontSize: (size: number) => void;
   onWatermarkOpacity: (opacity: number) => void;
   hasSelection: boolean;
+  selectedKind: Shape["kind"] | null;
   busy: boolean;
   onUndo: () => void;
   onRedo: () => void;
@@ -1242,8 +1324,21 @@ function EditToolbar(p: EditToolbarProps) {
   const { copy, selection: s, viewport: v } = p;
   // Use the measured toolbar width so it stays inside the viewport.
   const barW = Math.min(548, Math.max(280, v.width - 20));
-  const showStyle = p.tool === "rect" || p.tool === "ellipse" || p.tool === "arrow" || p.tool === "pen" || p.tool === "blur";
-  const hasExtraRow = showStyle || p.tool === "text" || p.tool === "watermark";
+  const selectingDrawable =
+    p.selectedKind === "rect" ||
+    p.selectedKind === "ellipse" ||
+    p.selectedKind === "arrow" ||
+    p.selectedKind === "pen" ||
+    p.selectedKind === "blur";
+  const showStroke =
+    p.tool === "rect" ||
+    p.tool === "ellipse" ||
+    p.tool === "arrow" ||
+    p.tool === "pen" ||
+    p.tool === "blur" ||
+    selectingDrawable;
+  const showFont = p.tool === "text" || p.selectedKind === "text";
+  const hasExtraRow = showStroke || showFont || p.tool === "watermark";
   const barH = hasExtraRow ? 88 : 56;
   const margin = 10;
   const gap = 12;
@@ -1301,7 +1396,7 @@ function EditToolbar(p: EditToolbarProps) {
         </button>
       </div>
 
-      {showStyle && (
+      {(showStroke || showFont) && (
         <div className="ov-toolbar-row is-style">
           <div className="ov-swatches">
             {PALETTE.map((c) => (
@@ -1314,32 +1409,34 @@ function EditToolbar(p: EditToolbarProps) {
               />
             ))}
           </div>
-          <input
-            className="ov-range"
-            type="range"
-            min={1}
-            max={20}
-            value={p.strokeWidth}
-            onChange={(e) => p.onStroke(Number(e.target.value))}
-            title={`粗细 ${p.strokeWidth}px`}
-            style={{ ["--fill" as string]: `${((p.strokeWidth - 1) / 19) * 100}%` }}
-          />
-        </div>
-      )}
-
-      {p.tool === "text" && (
-        <div className="ov-toolbar-row is-style">
-          <span className="ov-style-label">{copy.fontSize}</span>
-          <input
-            className="ov-range"
-            type="range"
-            min={10}
-            max={96}
-            value={p.fontSize}
-            onChange={(e) => p.onFontSize(Number(e.target.value))}
-            title={`字号 ${p.fontSize}px`}
-          />
-          <span className="ov-style-value tnum">{p.fontSize}px</span>
+          {showStroke && (
+            <input
+              className="ov-range"
+              type="range"
+              min={1}
+              max={20}
+              value={p.strokeWidth}
+              onChange={(e) => p.onStroke(Number(e.target.value))}
+              title={`粗细 ${p.strokeWidth}px`}
+              style={{ ["--fill" as string]: `${((p.strokeWidth - 1) / 19) * 100}%` }}
+            />
+          )}
+          {showFont && (
+            <>
+              <span className="ov-style-label">{copy.fontSize}</span>
+              <input
+                className="ov-range"
+                type="range"
+                min={10}
+                max={96}
+                value={p.fontSize}
+                onChange={(e) => p.onFontSize(Number(e.target.value))}
+                title={`字号 ${p.fontSize}px`}
+                style={{ ["--fill" as string]: `${((p.fontSize - 10) / 86) * 100}%` }}
+              />
+              <span className="ov-style-value tnum">{p.fontSize}px</span>
+            </>
+          )}
         </div>
       )}
 
