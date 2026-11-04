@@ -1450,13 +1450,14 @@ fn overlay_payload(frame: &CapturedFrame) -> Vec<u8> {
 pub fn windows_under_cursor(app: &AppHandle, monitor_id: u32, x: f64, y: f64) -> Vec<WindowHit> {
     let state = app.state::<AppState>();
     let geoms = state.pending.lock().unwrap().geoms.clone();
+    let language = crate::settings::load(app).language;
     let Some(index) = geoms.iter().position(|g| g.id == monitor_id) else {
         return Vec::new();
     };
     let _ = index;
     // Window discovery is an enhancement and must never block capture.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        platform::windows_under_cursor(&geoms, monitor_id, x, y)
+        platform::windows_under_cursor(&geoms, monitor_id, x, y, language)
     }))
     .unwrap_or_else(|_| {
         log::warn!("window identification failed; continuing without window snapping");

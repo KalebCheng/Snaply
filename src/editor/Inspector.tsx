@@ -1,4 +1,5 @@
 import { PALETTE, type ToolId } from "../types";
+import type { MainCopy } from "../i18n/main";
 
 type Props = {
   tool: ToolId;
@@ -10,11 +11,12 @@ type Props = {
   onStroke: (n: number) => void;
   onFontSize: (n: number) => void;
   onDelete: () => void;
+  labels: MainCopy;
 };
 
 /** Floating property panel for color, stroke width, and font size. */
 export function Inspector(props: Props) {
-  const { tool, color, strokeWidth, fontSize, hasSelection } = props;
+  const { tool, color, strokeWidth, fontSize, hasSelection, labels } = props;
   // Keep style controls visible while the selection tool is active.
   const showStroke = tool !== "text" || hasSelection;
   const showFont = tool === "text" || tool === "select" || hasSelection;
@@ -22,7 +24,7 @@ export function Inspector(props: Props) {
   return (
     <div className="ed-inspector">
       <div className="ed-insp-section">
-        <div className="ed-insp-label">颜色</div>
+        <div className="ed-insp-label">{labels.color}</div>
         <div className="ed-swatches">
           {PALETTE.map((c) => (
             <button
@@ -39,7 +41,7 @@ export function Inspector(props: Props) {
       {showStroke && (
         <div className="ed-insp-section">
           <div className="ed-insp-label">
-            粗细
+            {labels.stroke}
             <span className="ed-insp-value tnum">{strokeWidth}px</span>
           </div>
           <input
@@ -58,7 +60,7 @@ export function Inspector(props: Props) {
       {showFont && (
         <div className="ed-insp-section">
           <div className="ed-insp-label">
-            字号
+            {labels.fontSize}
             <span className="ed-insp-value tnum">{fontSize}px</span>
           </div>
           <div className="ed-stepper">
@@ -79,8 +81,8 @@ export function Inspector(props: Props) {
       )}
 
       {hasSelection && (
-        <button className="ed-danger" onClick={props.onDelete} title="删除所选 (Backspace)">
-          删除所选
+        <button className="ed-danger" onClick={props.onDelete} title={labels.deleteSelectionTitle}>
+          {labels.deleteSelection}
         </button>
       )}
     </div>

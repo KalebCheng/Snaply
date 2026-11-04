@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api, isTauri } from "../lib/ipc";
+import { localizeError } from "../i18n/errors";
 import type { AppInfo, Language, Settings, SettingsPayload, UpdateInfo } from "../types";
 import { version as appVersion } from "../../package.json";
 import { AboutSection, type UpdateState } from "./AboutSection";
@@ -73,7 +74,7 @@ export function SettingsWindow() {
 
   useEffect(() => {
     load().catch((cause) => {
-      setError(String(cause));
+      setError(localizeError(cause, defaultSettings.language));
       setDraft(defaultSettings);
     });
   }, [load]);
@@ -123,7 +124,7 @@ export function SettingsWindow() {
       setDraft(next.settings);
       setSavedAt(Date.now());
     } catch (cause) {
-      setError(String(cause));
+      setError(localizeError(cause, draft.language));
     } finally {
       setSaving(false);
     }
@@ -165,7 +166,7 @@ export function SettingsWindow() {
       const directory = await api.pickSaveDir();
       if (directory) updateSettings({ saveDir: directory });
     } catch (cause) {
-      setError(String(cause));
+      setError(localizeError(cause, draft?.language ?? "zh-CN"));
     }
   };
 
@@ -175,13 +176,15 @@ export function SettingsWindow() {
       setPayload(next);
       setDraft(next.settings);
     } catch (cause) {
-      setError(String(cause));
+      setError(localizeError(cause, draft?.language ?? "zh-CN"));
     }
   };
 
   const openExternal = (url: string) => {
     if (!isTauri()) return;
-    void api.openExternalUrl(url).catch((cause) => setError(String(cause)));
+    void api
+      .openExternalUrl(url)
+      .catch((cause) => setError(localizeError(cause, draft?.language ?? "zh-CN")));
   };
 
   if (!draft) {

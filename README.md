@@ -153,7 +153,7 @@ Annotations are stored as objects over an immutable base capture, and export red
 - **No global cursor position on Linux.** `cursor_position` returns `None` on Linux, so the magnifier and window highlighting cannot follow the system cursor there and only see pointer events that reach the overlay. Treat color picking and window-under-cursor detection as limited on Linux.
 - **Windows with mixed display scaling.** Monitor geometry is reported in physical pixels while window and selection space is logical, and the mapping assumes a single scale factor. On multi-monitor setups where the displays use different scaling factors (for example 150% next to 100%), a selection can be offset or clamped at the screen edge. Single-display and uniform-scaling setups are the tested configuration; if you hit this, please open an issue with your display layout and scaling values.
 - **Community macOS builds lose Screen Recording permission after every rebuild.** Ad-hoc signing changes the code hash, so macOS treats each build as a new app. Re-grant the permission as described in the macOS notes above.
-- **Partial localization.** The language setting applies to the settings window and the capture overlay; the editor and the tray menu are currently Chinese only.
+- **Localization.** Settings, overlay, main window, editor, tray, and common errors follow the selected language. OS-provided window titles and unexpected low-level error details may remain in the system language.
 
 ## Releases
 

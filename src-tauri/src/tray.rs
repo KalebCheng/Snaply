@@ -3,15 +3,34 @@ use tauri_plugin_global_shortcut::ShortcutState;
 
 const TRAY_ID: &str = "snaply-tray";
 
+fn tray_labels(
+    language: crate::settings::Language,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    match language {
+        crate::settings::Language::SimplifiedChinese => {
+            ("截图", "设置…", "退出 Snaply", "Snaply — 截图")
+        }
+        crate::settings::Language::English => {
+            ("Capture", "Settings…", "Quit Snaply", "Snaply — Capture")
+        }
+        crate::settings::Language::Russian => {
+            ("Снимок", "Настройки…", "Выйти из Snaply", "Snaply — Снимок")
+        }
+    }
+}
+
 /// Build the tray menu. Rebuilt whenever the capture shortcut changes so the
 /// accelerator shown next to "capture" is never stale.
 fn tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let shortcut = crate::settings_window::current_shortcut(app);
-    let capture = MenuItem::with_id(app, "capture", "截图", true, Some(shortcut.as_str()))?;
-    let settings_item = MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Snaply", true, None::<&str>)?;
+    let (capture_label, settings_label, quit_label, _) =
+        tray_labels(crate::settings::load(app).language);
+    let capture = MenuItem::with_id(app, "capture", capture_label, true, Some(shortcut.as_str()))?;
+    let settings_item =
+        MenuItem::with_id(app, "settings", settings_label, true, Some("CmdOrCtrl+,"))?;
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     Menu::with_items(app, &[&capture, &settings_item, &sep, &quit])
 }
@@ -21,6 +40,8 @@ pub fn refresh_menu(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
+    let (_, _, _, tooltip) = tray_labels(crate::settings::load(app).language);
+    let _ = tray.set_tooltip(Some(tooltip));
     match tray_menu(app) {
         Ok(menu) => {
             if let Err(error) = tray.set_menu(Some(menu)) {
@@ -35,9 +56,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
     let menu = tray_menu(app)?;
+    let (_, _, _, tooltip) = tray_labels(crate::settings::load(app).language);
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Snaply — 截图")
+        .tooltip(tooltip)
         .menu(&menu)
         // Left click captures; right click opens the menu.
         .show_menu_on_left_click(false)

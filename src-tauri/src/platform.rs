@@ -2,6 +2,8 @@ use xcap::Monitor;
 #[cfg(not(target_os = "macos"))]
 use xcap::Window;
 
+use crate::settings::Language;
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorGeom {
@@ -151,6 +153,7 @@ pub fn windows_under_cursor(
     monitor_id: u32,
     cx: f64,
     cy: f64,
+    language: Language,
 ) -> Vec<WindowHit> {
     let Some(monitor) = monitors.iter().find(|m| m.id == monitor_id) else {
         return Vec::new();
@@ -159,11 +162,14 @@ pub fn windows_under_cursor(
     #[cfg(target_os = "macos")]
     {
         // Query CoreGraphics directly for accurate z-order and occlusion.
-        crate::macos_windows::windows_at_point(monitor, cx, cy)
+        crate::macos_windows::windows_at_point(monitor, cx, cy, language)
     }
 
     #[cfg(not(target_os = "macos"))]
-    windows_under_cursor_generic(monitor, cx, cy)
+    {
+        let _ = language;
+        windows_under_cursor_generic(monitor, cx, cy)
+    }
 }
 
 /// Approximate hit testing on other platforms using geometry and area.

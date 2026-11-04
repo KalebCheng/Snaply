@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Point, Rect, Shape, ToolId, WatermarkShape } from "../types";
+import type { Language, Point, Rect, Shape, ToolId, WatermarkShape } from "../types";
+import { localizeError } from "../i18n/errors";
+import { mainTranslations, type MainCopy } from "../i18n/main";
 import { clampRect, normalizeRect, shapeBounds, uid } from "../lib/geometry";
 import { drawShapeList } from "../lib/render";
 import { api } from "../lib/ipc";
@@ -19,6 +21,7 @@ type Props = {
   initialFontSize?: number;
   /** Inline editing mode: fill the viewport and hide the close button. */
   inline?: boolean;
+  language: Language;
   onCommitted?: (shapes: Shape[]) => void;
   onDone: () => void;
   onClose?: () => void;
@@ -54,10 +57,12 @@ export function Editor({
   initialStroke,
   initialFontSize,
   inline,
+  language,
   onCommitted,
   onDone,
   onClose,
 }: Props) {
+  const t = mainTranslations[language];
   const initialWatermark = initialShapes?.find((s): s is WatermarkShape => s.kind === "watermark");
   // Single source of truth for the document. Visual state (tool, selection, zoom,
   // pan, drafts) deliberately stays out of the history.
@@ -124,6 +129,10 @@ export function Editor({
     const height = crop ? crop.height : image.height;
     return { width: Math.max(1, width), height: Math.max(1, height) };
   }, [crop, image.height, image.width]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     const onResize = () => setStageSize({ width: window.innerWidth, height: window.innerHeight });
@@ -363,16 +372,19 @@ export function Editor({
     try {
       const { bytes } = await composeExport(image, shapes, crop);
       await api.copyImage(bytes);
-      showToast("已复制到剪贴板");
+      showToast(t.copied);
       return true;
     } catch (e) {
       // Keep the editor (and its annotations) open so the copy can be retried.
-      showToast(`复制失败：${String(e)}`, { label: "重试", run: () => retryRef.current() });
+      showToast(`${t.copyFailed}: ${localizeError(e, language)}`, {
+        label: t.retry,
+        run: () => retryRef.current(),
+      });
       return false;
     } finally {
       setBusy(false);
     }
-  }, [busy, image, shapes, crop, showToast]);
+  }, [busy, image, shapes, crop, showToast, t, language]);
 
   const save = useCallback(async () => {
     if (busy) return;
@@ -380,13 +392,13 @@ export function Editor({
     try {
       const { bytes } = await composeExport(image, shapes, crop);
       const path = await api.saveImage(bytes, initialPath);
-      showToast("已保存", { label: "在文件夹中显示", run: () => void api.revealInFolder(path) });
+      showToast(t.saved, { label: t.revealInFolder, run: () => void api.revealInFolder(path) });
     } catch (e) {
-      showToast(`保存失败：${String(e)}`);
+      showToast(`${t.saveFailed}: ${localizeError(e, language)}`);
     } finally {
       setBusy(false);
     }
-  }, [busy, image, shapes, crop, showToast]);
+  }, [busy, image, shapes, crop, initialPath, showToast, t, language]);
 
   const copyAndClose = useCallback(async () => {
     const ok = await copy();
@@ -749,7 +761,7 @@ export function Editor({
                   commitText();
                 }
               }}
-              placeholder="输入文字"
+              placeholder={t.textPlaceholder}
             />
           )}
         </div>
@@ -770,8 +782,8 @@ export function Editor({
         </div>
         {!inline && (
           <div className="ed-top-actions">
-            <button className="ed-ghost" onClick={onClose ?? onDone} title="关闭编辑器 (Esc)">
-              关闭
+            <button className="ed-ghost" onClick={onClose ?? onDone} title={t.closeEditor}>
+              {t.close}
             </button>
           </div>
         )}
@@ -792,6 +804,7 @@ export function Editor({
         onSave={() => void save()}
         onClose={() => (onClose ? onClose() : onDone())}
         onDone={() => void copyAndClose()}
+        labels={t}
         busy={busy}
       />
 
@@ -807,10 +820,12 @@ export function Editor({
           onStroke={updateSelectedStroke}
           onFontSize={updateSelectedFontSize}
           onDelete={removeSelected}
+          labels={t}
         />
 
         {tool === "watermark" && (
           <WatermarkPanel
+            copy={t}
             text={watermarkText}
             opacity={watermarkOpacity}
             fontSize={watermarkFontSize}
@@ -943,6 +958,7 @@ function roundRectTo(r: Rect): Rect {
 
 /** Watermark controls for text, opacity, and size. */
 function WatermarkPanel(props: {
+  copy: MainCopy;
   text: string;
   opacity: number;
   fontSize: number;
@@ -953,18 +969,18 @@ function WatermarkPanel(props: {
   return (
     <div className="ed-inspector ed-watermark">
       <div className="ed-insp-section">
-        <div className="ed-insp-label">水印文字</div>
+        <div className="ed-insp-label">{props.copy.watermarkText}</div>
         <input
           className="ed-input"
           value={props.text}
           onChange={(e) => props.onText(e.target.value)}
-          placeholder="例如：内部资料"
+          placeholder={props.copy.watermarkPlaceholder}
           spellCheck={false}
         />
       </div>
       <div className="ed-insp-section">
         <div className="ed-insp-label">
-          透明度
+          {props.copy.opacity}
           <span className="ed-insp-value tnum">{Math.round(props.opacity * 100)}%</span>
         </div>
         <input
@@ -979,7 +995,7 @@ function WatermarkPanel(props: {
       </div>
       <div className="ed-insp-section">
         <div className="ed-insp-label">
-          字号
+          {props.copy.fontSize}
           <span className="ed-insp-value tnum">{props.fontSize}px</span>
         </div>
         <input

@@ -18,6 +18,7 @@ use objc2_core_graphics::{
 };
 
 use crate::platform::{MonitorGeom, WindowHit};
+use crate::settings::Language;
 
 /// 属于系统界面而非用户应用的窗口。
 const EXCLUDED_OWNERS: &[&str] = &[
@@ -498,7 +499,12 @@ fn choose_resolved(candidates: &[ResolvedWindow]) -> Option<WindowHit> {
 }
 
 /// 返回指针下方最上层的可见应用窗口。
-pub fn windows_at_point(monitor: &MonitorGeom, cx: f64, cy: f64) -> Vec<WindowHit> {
+pub fn windows_at_point(
+    monitor: &MonitorGeom,
+    cx: f64,
+    cy: f64,
+    language: Language,
+) -> Vec<WindowHit> {
     if !cx.is_finite() || !cy.is_finite() {
         return Vec::new();
     }
@@ -507,9 +513,14 @@ pub fn windows_at_point(monitor: &MonitorGeom, cx: f64, cy: f64) -> Vec<WindowHi
     let mut candidates = Vec::new();
 
     if let Some(menu_bar) = menu_bar_at_point(monitor, global_x, global_y) {
+        let (title, app_name) = match language {
+            Language::SimplifiedChinese => ("系统菜单栏", "菜单栏"),
+            Language::English => ("System menu bar", "Menu bar"),
+            Language::Russian => ("Системное меню", "Строка меню"),
+        };
         return vec![WindowHit {
-            title: "系统菜单栏".into(),
-            app_name: "菜单栏".into(),
+            title: title.into(),
+            app_name: app_name.into(),
             x: menu_bar.x - monitor.x,
             y: menu_bar.y - monitor.y,
             width: menu_bar.width,
@@ -532,9 +543,14 @@ pub fn windows_at_point(monitor: &MonitorGeom, cx: f64, cy: f64) -> Vec<WindowHi
     choose_resolved(&candidates)
         .map(|hit| vec![hit])
         .unwrap_or_else(|| {
+            let (title, app_name) = match language {
+                Language::SimplifiedChinese => ("全屏", "桌面"),
+                Language::English => ("Full screen", "Desktop"),
+                Language::Russian => ("Полный экран", "Рабочий стол"),
+            };
             vec![WindowHit {
-                title: "全屏".into(),
-                app_name: "桌面".into(),
+                title: title.into(),
+                app_name: app_name.into(),
                 x: 0.0,
                 y: 0.0,
                 width: monitor.width,
@@ -615,7 +631,7 @@ mod tests {
             assert!(w.bounds.width.is_finite() && w.bounds.height.is_finite());
             assert!(w.bounds.x.is_finite() && w.bounds.y.is_finite());
         }
-        let _ = windows_at_point(&monitor, 100.0, 100.0);
+        let _ = windows_at_point(&monitor, 100.0, 100.0, Language::SimplifiedChinese);
     }
 
     #[test]

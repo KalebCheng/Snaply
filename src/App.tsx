@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Editor } from "./editor/Editor";
+import { localizeError } from "./i18n/errors";
+import { mainTranslations } from "./i18n/main";
 import { api, isTauri } from "./lib/ipc";
 import { bitmapFromRgba } from "./lib/decode";
 import { composeExport } from "./lib/export";
-import type { ShotPayload } from "./types";
+import type { Language, ShotPayload } from "./types";
 import "./styles/idle.css";
 
 type Editing = {
@@ -25,7 +27,25 @@ export function App() {
 function MainWindow() {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [language, setLanguage] = useState<Language>("zh-CN");
   const lastShotRef = useRef(0);
+  const languageRef = useRef<Language>("zh-CN");
+  const copy = mainTranslations[language];
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    void api
+      .getSettings()
+      .then(({ settings }) => {
+        languageRef.current = settings.language;
+        setLanguage(settings.language);
+      })
+      .catch(() => undefined);
+  }, []);
 
   // Handle overlay confirmation for edit, copy, or save.
   useEffect(() => {
@@ -39,10 +59,16 @@ function MainWindow() {
       if (payload.shotId && payload.shotId === lastShotRef.current) return;
       if (payload.shotId) lastShotRef.current = payload.shotId;
       setError(null);
+      const settings = await api.getSettings().catch(() => null);
+      if (settings) {
+        languageRef.current = settings.settings.language;
+        setLanguage(settings.settings.language);
+      }
+      const text = mainTranslations[languageRef.current];
 
       const info = await api.imageInfo();
       if (!info) {
-        throw new Error("截图数据已失效，请重新截图");
+        throw new Error(text.captureExpired);
       }
       const image = await bitmapFromRgba(await api.imageRgba(), info[0], info[1]);
 
@@ -80,7 +106,7 @@ function MainWindow() {
           void handle(payload).catch((cause) => {
             // Surface the failure instead of silently dropping a capture.
             console.error("shot-ready failed", cause);
-            setError(String(cause));
+            setError(localizeError(cause, languageRef.current));
             void api.hideMain().catch(() => undefined);
           });
         }),
@@ -107,6 +133,7 @@ function MainWindow() {
         initialColor={editing.color}
         initialStroke={editing.strokeWidth}
         initialFontSize={editing.fontSize}
+        language={language}
         onDone={() => {
           setEditing(null);
           void api.hideMain();
@@ -120,7 +147,7 @@ function MainWindow() {
     <div className="app-idle" data-tauri-drag-region>
       <div className="app-idle-card">
         <span className="app-idle-dot" />
-        {error ?? "Snaply 正在托盘运行 · 按快捷键或点托盘图标截图"}
+        {error ?? copy.idle}
       </div>
     </div>
   );

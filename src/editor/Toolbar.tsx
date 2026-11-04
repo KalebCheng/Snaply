@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ToolId } from "../types";
+import type { MainCopy } from "../i18n/main";
 
 type Props = {
   tool: ToolId;
@@ -15,6 +16,7 @@ type Props = {
   onSave: () => void;
   onClose: () => void;
   onDone: () => void;
+  labels: MainCopy;
   busy: boolean;
 };
 
@@ -22,29 +24,29 @@ type Props = {
  * Floating annotation toolbar.
  * Tools are grouped on the left, followed by history and output actions.
  */
-const ANNOTATE_TOOLS: { id: ToolId; label: string; hint: string; icon: ReactNode }[] = [
-  { id: "select", label: "选择", hint: "V", icon: <IconCursor /> },
-  { id: "rect", label: "矩形", hint: "R", icon: <IconRect /> },
-  { id: "ellipse", label: "椭圆", hint: "O", icon: <IconCircle /> },
-  { id: "arrow", label: "箭头", hint: "A", icon: <IconArrow /> },
-  { id: "pen", label: "画笔", hint: "P", icon: <IconPen /> },
-  { id: "blur", label: "马赛克", hint: "B", icon: <IconMosaic /> },
-  { id: "text", label: "文字", hint: "T", icon: <IconText /> },
-  { id: "watermark", label: "水印", hint: "W", icon: <IconWatermark /> },
-  { id: "crop", label: "裁剪", hint: "X", icon: <IconCrop /> },
+const ANNOTATE_TOOLS: { id: ToolId; hint: string; icon: ReactNode }[] = [
+  { id: "select", hint: "V", icon: <IconCursor /> },
+  { id: "rect", hint: "R", icon: <IconRect /> },
+  { id: "ellipse", hint: "O", icon: <IconCircle /> },
+  { id: "arrow", hint: "A", icon: <IconArrow /> },
+  { id: "pen", hint: "P", icon: <IconPen /> },
+  { id: "blur", hint: "B", icon: <IconMosaic /> },
+  { id: "text", hint: "T", icon: <IconText /> },
+  { id: "watermark", hint: "W", icon: <IconWatermark /> },
+  { id: "crop", hint: "X", icon: <IconCrop /> },
 ];
 
 export function Toolbar(props: Props) {
-  const { tool, onTool, canUndo, canRedo, busy } = props;
+  const { tool, onTool, canUndo, canRedo, busy, labels } = props;
   return (
-    <div className="ed-toolbar" role="toolbar" aria-label="标注工具">
+    <div className="ed-toolbar" role="toolbar" aria-label={labels.toolbar}>
       <div className="ed-tools">
         {ANNOTATE_TOOLS.map((t) => (
           <button
             key={t.id}
             className={`ed-tool ${tool === t.id ? "is-active" : ""}`}
             onClick={() => onTool(t.id)}
-            title={`${t.label} (${t.hint})`}
+            title={`${labels.tools[t.id]} (${t.hint})`}
             aria-pressed={tool === t.id}
           >
             {t.icon}
@@ -54,9 +56,9 @@ export function Toolbar(props: Props) {
           <button
             className="ed-tool ed-tool-wide"
             onClick={props.onResetCrop}
-            title="还原裁剪（或再按一次 X）"
+            title={labels.restoreCropTitle}
           >
-            还原
+            {labels.restoreCrop}
           </button>
         )}
       </div>
@@ -64,22 +66,22 @@ export function Toolbar(props: Props) {
       <span className="ed-divider" />
 
       <div className="ed-tools">
-        <button className="ed-tool" onClick={props.onUndo} disabled={!canUndo} title="撤销 (⌘Z)">
+        <button className="ed-tool" onClick={props.onUndo} disabled={!canUndo} title={`${labels.undo} (⌘Z)`}>
           <IconUndo />
         </button>
-        <button className="ed-tool" onClick={props.onRedo} disabled={!canRedo} title="重做 (⇧⌘Z)">
+        <button className="ed-tool" onClick={props.onRedo} disabled={!canRedo} title={`${labels.redo} (⇧⌘Z)`}>
           <IconRedo />
         </button>
-        <button className="ed-tool" onClick={props.onCopy} disabled={busy} title="复制 (⌘C)">
+        <button className="ed-tool" onClick={props.onCopy} disabled={busy} title={`${labels.copy} (⌘C)`}>
           <IconCopy />
         </button>
-        <button className="ed-tool" onClick={props.onSave} disabled={busy} title="保存 (⌘S)">
+        <button className="ed-tool" onClick={props.onSave} disabled={busy} title={`${labels.save} (⌘S)`}>
           <IconDownload />
         </button>
-        <button className="ed-tool is-danger" onClick={props.onClose} disabled={busy} title="关闭 (Esc)">
+        <button className="ed-tool is-danger" onClick={props.onClose} disabled={busy} title={`${labels.close} (Esc)`}>
           <IconX />
         </button>
-        <button className="ed-tool is-confirm" onClick={props.onDone} disabled={busy} title="复制并关闭 (Enter)">
+        <button className="ed-tool is-confirm" onClick={props.onDone} disabled={busy} title={`${labels.done} (Enter)`}>
           <IconCheck />
         </button>
       </div>

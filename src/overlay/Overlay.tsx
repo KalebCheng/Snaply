@@ -6,6 +6,7 @@ import { decodeOverlayFrame } from "../lib/decode";
 import { composeExport } from "../lib/export";
 import { drawShapeList } from "../lib/render";
 import { clampToImage, normalizeRect, uid } from "../lib/geometry";
+import { localizeError } from "../i18n/errors";
 import type {
   Language,
   Point,
@@ -167,10 +168,10 @@ export function Overlay() {
         // Read settings independently while decoding the screenshot.
         setImage(await decodeOverlayFrame(await api.overlayImage(monitorId)));
       } catch (e) {
-        setError(String(e));
+        setError(localizeError(e, language));
       }
     })();
-  }, [copy.missingMonitor, monitorId, prewarm, syncSettings]);
+  }, [copy.missingMonitor, language, monitorId, prewarm, syncSettings]);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -212,7 +213,7 @@ export function Overlay() {
           });
         } catch (cause) {
           // Keep the failure visible instead of leaving an invisible session.
-          if (token === sessionTokenRef.current) setError(String(cause));
+          if (token === sessionTokenRef.current) setError(localizeError(cause, language));
         }
       }, eventTarget),
       listen("overlay-reset", () => {
@@ -253,7 +254,7 @@ export function Overlay() {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [monitorId, syncSettings, win]);
+  }, [language, monitorId, syncSettings, win]);
 
   // AppKit may leave a transparent UIElement overlay visible but non-key. Rust
   // forwards global button phases in that state; replay them on the overlay
@@ -667,7 +668,7 @@ export function Overlay() {
         .catch((e) => {
           commitLockRef.current = false;
           setBusy(false);
-          setError(`${copy.copyFailed}: ${String(e)}`);
+          setError(`${copy.copyFailed}: ${localizeError(e, language)}`);
         });
       return;
     }
@@ -694,7 +695,7 @@ export function Overlay() {
       .catch((e) => {
         commitLockRef.current = false;
         setBusy(false);
-        setError(String(e));
+        setError(localizeError(e, language));
       });
   };
 
@@ -1053,6 +1054,7 @@ export function Overlay() {
     watermarkFontSize,
     watermarkOpacity,
     copy.copyFailed,
+    language,
   ]);
 
   // Some WebViews emit copy without a keydown event, so handle both.
@@ -1070,7 +1072,7 @@ export function Overlay() {
     document.addEventListener("copy", onCopy, true);
     return () => document.removeEventListener("copy", onCopy, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, textInput, sel, shapes, image, copyAfterCapture, viewport, color, strokeWidth, fontSize, watermarkText, watermarkFontSize, watermarkOpacity]);
+  }, [mode, textInput, sel, shapes, image, copyAfterCapture, viewport, color, strokeWidth, fontSize, watermarkText, watermarkFontSize, watermarkOpacity, language]);
 
   useEffect(() => {
     const onContext = (e: MouseEvent) => {
@@ -1662,7 +1664,7 @@ function EditToolbar(p: EditToolbarProps) {
               max={20}
               value={p.strokeWidth}
               onChange={(e) => p.onStroke(Number(e.target.value))}
-              title={`粗细 ${p.strokeWidth}px`}
+              title={`${copy.strokeWidth} ${p.strokeWidth}px`}
               style={{ ["--fill" as string]: `${((p.strokeWidth - 1) / 19) * 100}%` }}
             />
           )}
@@ -1676,7 +1678,7 @@ function EditToolbar(p: EditToolbarProps) {
                 max={96}
                 value={p.fontSize}
                 onChange={(e) => p.onFontSize(Number(e.target.value))}
-                title={`字号 ${p.fontSize}px`}
+                title={`${copy.fontSize} ${p.fontSize}px`}
                 style={{ ["--fill" as string]: `${((p.fontSize - 10) / 86) * 100}%` }}
               />
               <span className="ov-style-value tnum">{p.fontSize}px</span>
@@ -1708,7 +1710,7 @@ function EditToolbar(p: EditToolbarProps) {
             max={120}
             value={p.watermarkFontSize}
             onChange={(e) => p.onWatermarkFontSize(Number(e.target.value))}
-            title={`水印字号 ${p.watermarkFontSize}px`}
+            title={`${copy.watermarkFontSize} ${p.watermarkFontSize}px`}
           />
           <span className="ov-style-value tnum">{p.watermarkFontSize}px</span>
           <span className="ov-style-label">{copy.opacity}</span>
@@ -1719,7 +1721,7 @@ function EditToolbar(p: EditToolbarProps) {
             max={80}
             value={Math.round(p.watermarkOpacity * 100)}
             onChange={(e) => p.onWatermarkOpacity(Number(e.target.value) / 100)}
-            title={`水印透明度 ${Math.round(p.watermarkOpacity * 100)}%`}
+            title={`${copy.watermarkOpacity} ${Math.round(p.watermarkOpacity * 100)}%`}
           />
           <span className="ov-style-value tnum">{Math.round(p.watermarkOpacity * 100)}%</span>
         </div>
