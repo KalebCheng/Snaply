@@ -186,6 +186,9 @@ export function Overlay() {
     if (!isTauri() || monitorId == null) return;
     let disposed = false;
     let unlisteners: UnlistenFn[] = [];
+    // Tauri's default JS listener target is `Any`, which also matches events
+    // emitted to another webview. Bind overlay events to this window's label.
+    const eventTarget = win ? { target: win.label } : undefined;
     void Promise.all([
       listen<number>("overlay-refresh", async ({ payload }) => {
         if (sessionRef.current === payload) return;
@@ -211,7 +214,7 @@ export function Overlay() {
           // Keep the failure visible instead of leaving an invisible session.
           if (token === sessionTokenRef.current) setError(String(cause));
         }
-      }),
+      }, eventTarget),
       listen("overlay-reset", () => {
         sessionTokenRef.current += 1;
         resetAll();
@@ -220,7 +223,7 @@ export function Overlay() {
           previous?.close();
           return null;
         });
-      }),
+      }, eventTarget),
       listen("overlay-space-changing", () => {
         // Rust hides the overlay as soon as the Space starts changing so the
         // system animation is the only thing on screen. Drop the frozen frame
@@ -233,7 +236,7 @@ export function Overlay() {
           previous?.close();
           return null;
         });
-      }),
+      }, eventTarget),
     ]).then(async (registered) => {
       if (disposed) {
         registered.forEach((unlisten) => unlisten());
@@ -250,7 +253,7 @@ export function Overlay() {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [monitorId, syncSettings]);
+  }, [monitorId, syncSettings, win]);
 
   // AppKit may leave a transparent UIElement overlay visible but non-key. Rust
   // forwards global button phases in that state; replay them on the overlay
