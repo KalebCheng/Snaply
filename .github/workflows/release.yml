@@ -151,9 +151,10 @@ jobs:
           ref: ${{ needs.validate.outputs.tag }}
 
       - name: Install pnpm
+        # The pnpm version comes from the `packageManager` field in
+        # package.json; passing `version` here as well makes the action fail
+        # with "Multiple versions of pnpm specified".
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Install Node.js
         uses: actions/setup-node@v7
@@ -254,9 +255,10 @@ jobs:
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: Install pnpm
+        # The pnpm version comes from the `packageManager` field in
+        # package.json; passing `version` here as well makes the action fail
+        # with "Multiple versions of pnpm specified".
         uses: pnpm/action-setup@v6
-        with:
-          version: 10
 
       - name: Install Node.js
         uses: actions/setup-node@v7
