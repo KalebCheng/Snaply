@@ -2,8 +2,8 @@
 use objc2::{sel, MainThreadMarker};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSRunningApplication, NSScreenSaverWindowLevel,
-    NSWindow, NSWindowCollectionBehavior, NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification,
+    NSApplication, NSApplicationActivationPolicy, NSScreenSaverWindowLevel, NSWindow,
+    NSWindowCollectionBehavior, NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification,
 };
 #[cfg(target_os = "macos")]
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -15,11 +15,14 @@ use objc2_core_graphics::{
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSNotification;
+#[cfg(target_os = "macos")]
 use std::collections::HashMap;
 #[cfg(target_os = "macos")]
 use std::ptr::NonNull;
 use std::sync::{atomic::Ordering, Arc};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, EventTarget, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 #[cfg(not(target_os = "macos"))]
 use tauri::{LogicalPosition, LogicalSize};
 use xcap::Monitor;
@@ -190,9 +193,9 @@ fn start_pointer_bridge(app: &AppHandle, generation: u64, geoms: Vec<MonitorGeom
                     if let Some(window) = handle.get_webview_window(&overlay_label(monitor_id)) {
                         emit_native_pointer(&window, &geoms, "down", x, y);
                     }
-                    if !NSRunningApplication::currentApplication().isActive() {
-                        request_overlay_focus(&handle, monitor_id);
-                    }
+                    // Clicking any display must make that overlay key, even when
+                    // another Snaply overlay is already the active window.
+                    request_overlay_focus(&handle, monitor_id);
                 }
             } else if is_down && was_down {
                 if let Some(monitor_id) = press_monitor {
@@ -343,6 +346,17 @@ pub fn set_app_visibility(app: &AppHandle, visible: bool) {
 
 fn overlay_label(monitor_id: u32) -> String {
     format!("{OVERLAY_PREFIX}{monitor_id}")
+}
+
+/// Frame refreshes must be scoped to one overlay. `WebviewWindow::emit`
+/// broadcasts to every webview, which makes secondary monitors request pixels
+/// before their frames have been installed.
+fn emit_overlay_refresh(app: &AppHandle, monitor_id: u32, session: u64) {
+    let _ = app.emit_to(
+        EventTarget::webview_window(overlay_label(monitor_id)),
+        "overlay-refresh",
+        session,
+    );
 }
 
 pub(crate) fn monitor_id_from_label(label: &str) -> Option<u32> {
@@ -755,9 +769,7 @@ pub fn overlay_ready(app: &AppHandle, monitor_id: u32) {
             .then_some(pending.started_at_ms)
     };
     if let Some(session) = session {
-        if let Some(window) = app.get_webview_window(&overlay_label(monitor_id)) {
-            let _ = window.emit("overlay-refresh", session);
-        }
+        emit_overlay_refresh(app, monitor_id, session);
     }
 }
 
@@ -1067,7 +1079,7 @@ fn begin_session(
         .map(|ready| ready.contains(&focused_id))
         .unwrap_or(false);
     if ready {
-        let _ = window.emit("overlay-refresh", started_at_ms);
+        emit_overlay_refresh(app, focused_id, started_at_ms);
     }
 
     let generation = app
@@ -1133,7 +1145,7 @@ fn install_monitor_frame(
         .map(|ready| ready.contains(&monitor_id))
         .unwrap_or(false);
     if ready {
-        let _ = window.emit("overlay-refresh", started_at_ms);
+        emit_overlay_refresh(app, monitor_id, started_at_ms);
     }
     // A monitor captured after the session's initial watchdog ran still needs
     // its own fallback in case this WebView never reports a painted frame.
@@ -1364,7 +1376,7 @@ fn install_space_frames(app: &AppHandle, frames: HashMap<u32, CapturedFrame>, ge
         pending.geoms.clone()
     };
 
-    for (label, window) in app.webview_windows() {
+    for (label, _window) in app.webview_windows() {
         let Some(monitor_id) = monitor_id_from_label(&label) else {
             continue;
         };
@@ -1374,7 +1386,7 @@ fn install_space_frames(app: &AppHandle, frames: HashMap<u32, CapturedFrame>, ge
             .map(|ready| ready.contains(&monitor_id))
             .unwrap_or(false);
         if ready {
-            let _ = window.emit("overlay-refresh", started_at_ms);
+            emit_overlay_refresh(app, monitor_id, started_at_ms);
         }
     }
 

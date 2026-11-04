@@ -972,7 +972,7 @@ export function Overlay() {
         setShapes((prev) => prev.slice(0, -1));
         return;
       }
-      if (mod && k === "c" && (mode === "edit" || sel)) {
+      if (mod && (k === "c" || e.code === "KeyC") && (mode === "edit" || sel)) {
         e.preventDefault();
         commit("copy");
         return;
@@ -980,6 +980,11 @@ export function Overlay() {
       if (mode === "edit" && mod && k === "s") {
         e.preventDefault();
         commit("save");
+        return;
+      }
+      if (mode === "edit" && mod && k === "e") {
+        e.preventDefault();
+        commit("edit");
         return;
       }
       if (e.key === "Enter" && (sel || hover)) {
@@ -990,7 +995,7 @@ export function Overlay() {
           setTool("select");
           setHover(null);
         } else {
-          commit("edit");
+          commit("copy");
         }
         return;
       }
@@ -1022,8 +1027,10 @@ export function Overlay() {
         }
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase: toolbar/text controls must not be able to swallow the
+    // screenshot copy shortcut after a selection is active.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mode,
@@ -1304,8 +1311,9 @@ export function Overlay() {
           onRedo={() => undefined}
           onCopy={() => commit("copy")}
           onSave={() => commit("save")}
+          onEdit={() => commit("edit")}
           onClose={closeToIdle}
-          onDone={() => commit("edit")}
+          onDone={() => commit("copy")}
         />
       )}
     </div>
@@ -1543,6 +1551,7 @@ type EditToolbarProps = {
   onRedo: () => void;
   onCopy: () => void;
   onSave: () => void;
+  onEdit: () => void;
   onClose: () => void;
   onDone: () => void;
 };
@@ -1618,10 +1627,13 @@ function EditToolbar(p: EditToolbarProps) {
         <button className="ov-tool" title={`${copy.save} (⌘S)`} onClick={p.onSave} disabled={p.busy}>
           <IconDownload />
         </button>
+        <button className="ov-tool" title={`${copy.editAction} (⌘E)`} onClick={p.onEdit} disabled={p.busy}>
+          <IconEdit />
+        </button>
         <button className="ov-tool is-close" title={`${copy.close} (Esc)`} onClick={p.onClose} disabled={p.busy}>
           <IconX />
         </button>
-        <button className="ov-tool is-confirm" title={`${copy.done} (Enter)`} onClick={p.onDone} disabled={p.busy}>
+        <button className="ov-tool is-confirm" title={`${copy.copyAction} (Enter)`} onClick={p.onDone} disabled={p.busy}>
           <IconCheck />
         </button>
       </div>
@@ -1835,6 +1847,14 @@ function IconCheck() {
   return (
     <svg {...icon} strokeWidth={2.2}>
       <path d="m5 12.5 4.5 4.5L19 7" />
+    </svg>
+  );
+}
+function IconEdit() {
+  return (
+    <svg {...icon}>
+      <path d="M13.5 6.5 17.5 10.5" />
+      <path d="m4 20 1-5 10.5-10.5a2.1 2.1 0 0 1 3 0l1 1a2.1 2.1 0 0 1 0 3L9 19l-5 1Z" />
     </svg>
   );
 }

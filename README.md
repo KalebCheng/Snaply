@@ -40,7 +40,7 @@ Windows SmartScreen may also show a warning for community builds.
 - **One shortcut to capture** — global shortcut, configurable from Settings; Snaply starts silently in the system tray.
 - **Window and region capture** — live window highlighting on macOS, menu bar and desktop fallbacks, precise region selection with resize handles, and a pixel magnifier with a built-in color picker.
 - **In-place annotation** — rectangle, ellipse, arrow, pen, mosaic, text, watermark, and crop. Move, undo, redo, or delete annotations before exporting.
-- **Fast handoff** — copy the annotated result, save it as PNG, or press `Enter` to finish.
+- **Fast handoff** — press `Enter` or click the checkmark to copy the annotated result, save it as PNG, or open the full editor for further changes.
 - **Native updates** — check for the latest GitHub release from the About pane.
 
 ## Keyboard Shortcuts
@@ -50,6 +50,7 @@ Windows SmartScreen may also show a warning for community builds.
 | Start capture | `⌘⇧1` / `Ctrl+Shift+1` |
 | Open settings | Tray menu → Settings (no global keyboard shortcut is registered) |
 | Copy / save | `⌘C` / `⌘S` (`Ctrl+C` / `Ctrl+S`) |
+| Open editor | `⌘E` / `Ctrl+E` |
 | Undo / redo | `⌘Z` / `⇧⌘Z` or `⌘Y` (`Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y`) |
 | Fit image to window | `⌘0` / `Ctrl+0` |
 | Select / rectangle / ellipse / arrow | `V` / `R` / `O` / `A` |
