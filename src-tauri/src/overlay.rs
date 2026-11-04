@@ -8,8 +8,10 @@ use objc2_app_kit::{
 #[cfg(target_os = "macos")]
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 #[cfg(target_os = "macos")]
+#[allow(deprecated)]
 use objc2_core_graphics::{
-    CGDisplayBounds, CGEventSource, CGEventSourceStateID, CGMainDisplayID, CGMouseButton,
+    CGDataProvider, CGDisplayBounds, CGEventSource, CGEventSourceStateID, CGImage, CGMainDisplayID,
+    CGMouseButton, CGWindowImageOption, CGWindowListCreateImage, CGWindowListOption,
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSNotification;
@@ -385,12 +387,9 @@ fn show_overlay(app: &AppHandle, monitor_id: u32) {
         })
         .ok()
         .flatten();
-    if let Some(monitor) = monitor.as_ref() {
-        // Showing the window can resize the native frame again, so re-apply it.
-        configure_overlay_window(&window, monitor);
-    }
     let _ = window.show();
     if let Some(monitor) = monitor.as_ref() {
+        // Showing the window can resize the native frame again, so re-apply it.
         configure_overlay_window(&window, monitor);
     }
     let state = app.state::<AppState>();
@@ -419,14 +418,15 @@ fn show_overlay(app: &AppHandle, monitor_id: u32) {
 /// capture) can never flash the previous frame on screen.
 pub fn overlay_frame_ready(app: &AppHandle, monitor_id: u32) {
     let state = app.state::<AppState>();
-    let in_session = state
-        .pending
-        .lock()
-        .map(|pending| pending.frames_by_id.contains_key(&monitor_id))
-        .unwrap_or(false);
-    if !in_session {
+    let started_at_ms = state.pending.lock().ok().and_then(|pending| {
+        pending
+            .frames_by_id
+            .contains_key(&monitor_id)
+            .then_some(pending.started_at_ms)
+    });
+    let Some(started_at_ms) = started_at_ms else {
         return;
-    }
+    };
     let already_shown = state
         .shown_overlays
         .lock()
@@ -436,13 +436,18 @@ pub fn overlay_frame_ready(app: &AppHandle, monitor_id: u32) {
         return;
     }
     show_overlay(app, monitor_id);
+    log::info!(
+        "overlay {monitor_id} visible {} ms after the shortcut",
+        now_ms().saturating_sub(started_at_ms)
+    );
 }
 
-/// Fall back to showing every overlay if the WebView never reports a frame.
+/// Fall back to showing each captured overlay if its WebView never reports a
+/// painted frame.
 ///
 /// Without this an unexpected frontend error would leave an invisible capture
 /// session running. The timeout is long enough for a full-resolution decode.
-fn start_show_watchdog(app: &AppHandle, generation: u64, monitors: Vec<u32>) {
+fn start_show_watchdog(app: &AppHandle, generation: u64, session_id: u64, monitors: Vec<u32>) {
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(1_500));
@@ -451,6 +456,13 @@ fn start_show_watchdog(app: &AppHandle, generation: u64, monitors: Vec<u32>) {
             return;
         }
         let missing: Vec<u32> = {
+            let pending = state
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pending.session_id != session_id {
+                return;
+            }
             let shown = state
                 .shown_overlays
                 .lock()
@@ -458,7 +470,7 @@ fn start_show_watchdog(app: &AppHandle, generation: u64, monitors: Vec<u32>) {
                 .unwrap_or_default();
             monitors
                 .into_iter()
-                .filter(|id| !shown.contains(id))
+                .filter(|id| pending.frames_by_id.contains_key(id) && !shown.contains(id))
                 .collect()
         };
         if missing.is_empty() {
@@ -485,6 +497,7 @@ fn abort_session(app: &AppHandle) {
         set_app_visibility(app, true);
     }
     let state = app.state::<AppState>();
+    state.capture_session.fetch_add(1, Ordering::SeqCst);
     {
         let mut pending = state
             .pending
@@ -680,7 +693,7 @@ fn ensure_overlay_window(
     create_overlay_window(app, monitor).map(|window| (window, true))
 }
 
-fn sync_overlay_windows(app: &AppHandle, monitors: &[MonitorInfo]) -> Result<(), String> {
+fn prune_overlay_windows(app: &AppHandle, monitors: &[MonitorInfo]) {
     let active_labels: std::collections::HashSet<String> =
         monitors.iter().map(|m| overlay_label(m.id)).collect();
     for (label, window) in app.webview_windows() {
@@ -696,7 +709,10 @@ fn sync_overlay_windows(app: &AppHandle, monitors: &[MonitorInfo]) -> Result<(),
         }
         let _ = window.destroy();
     }
+}
 
+fn sync_overlay_windows(app: &AppHandle, monitors: &[MonitorInfo]) -> Result<(), String> {
+    prune_overlay_windows(app, monitors);
     for monitor in monitors {
         let (window, _) = ensure_overlay_window(app, monitor)?;
         let _ = window.hide();
@@ -747,9 +763,9 @@ pub fn overlay_ready(app: &AppHandle, monitor_id: u32) {
 
 /// Start a capture session and open one overlay per monitor.
 ///
-/// The blocking screen grab runs on a worker thread and the window/AppKit work
-/// is posted back to the main thread, so the hotkey path never freezes the UI
-/// for the duration of a multi-display capture.
+/// The monitor under the cursor is captured and published first. Other monitors
+/// are captured afterwards, so a multi-display setup no longer adds its full
+/// capture time to the focused display's hotkey-to-visible latency.
 ///
 /// Must be called from the main thread (it hides the application windows).
 pub fn begin(app: &AppHandle) -> Result<(), String> {
@@ -757,6 +773,9 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     if state.capture_lock.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+    let session_id = state.capture_session.fetch_add(1, Ordering::SeqCst) + 1;
+    let started_at_ms = now_ms();
+    let trigger_at = std::time::Instant::now();
     #[cfg(target_os = "macos")]
     {
         // Cancel any pending Space recapture: this session is the newest one.
@@ -785,40 +804,34 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
         // Worker threads need their own autorelease pool on macOS: the capture
         // path allocates CoreGraphics/Foundation objects.
         #[cfg(target_os = "macos")]
-        let captured = objc2::rc::autoreleasepool(|_pool| capture_frames());
-        #[cfg(not(target_os = "macos"))]
-        let captured = capture_frames();
-        let main_handle = handle.clone();
-        let posted = handle.run_on_main_thread(move || {
-            let state = main_handle.state::<AppState>();
-            if let Err(error) = begin_ui(&main_handle, captured) {
-                log::error!("capture session failed: {error}");
-                abort_session(&main_handle);
-            }
-            state.capture_lock.store(false, Ordering::SeqCst);
+        objc2::rc::autoreleasepool(|_pool| {
+            capture_session_in_worker(handle.clone(), session_id, started_at_ms, trigger_at);
         });
-        if posted.is_err() {
-            // The app is shutting down; release the lock so a restarted app can capture.
-            handle
-                .state::<AppState>()
-                .capture_lock
-                .store(false, Ordering::SeqCst);
-        }
+        #[cfg(not(target_os = "macos"))]
+        capture_session_in_worker(handle.clone(), session_id, started_at_ms, trigger_at);
     });
     Ok(())
 }
 
-/// Captured monitor metadata, raw pixels, and geometry.
-type CapturedFrames = (
-    Vec<MonitorInfo>,
-    HashMap<u32, CapturedFrame>,
-    Vec<MonitorGeom>,
-);
+struct CaptureLayout {
+    monitors: Vec<Monitor>,
+    infos: Vec<MonitorInfo>,
+    geoms: Vec<MonitorGeom>,
+    focused_index: usize,
+}
 
-/// Capture every monitor on the current thread because xcap is not `Send`.
-fn capture_frames() -> Result<CapturedFrames, String> {
+/// Build the monitor list on the capture worker because xcap is not `Send`.
+fn capture_layout() -> Result<CaptureLayout, String> {
     let monitors = Monitor::all().map_err(platform::describe_capture_error)?;
+    if monitors.is_empty() {
+        return Err("未检测到可截图的显示器".into());
+    }
     let geoms = platform::monitor_geoms_for(&monitors);
+    let infos = monitors
+        .iter()
+        .enumerate()
+        .map(|(index, monitor)| to_info(monitor, &geoms, index))
+        .collect();
     let focused_index = platform::cursor_position()
         .and_then(|(x, y)| {
             geoms
@@ -831,73 +844,208 @@ fn capture_frames() -> Result<CapturedFrames, String> {
                 .position(|m| m.is_primary().unwrap_or(false))
         })
         .unwrap_or(0);
-    let mut capture_order: Vec<usize> = (0..monitors.len()).collect();
-    capture_order.sort_by_key(|index| *index != focused_index);
-    let mut infos = Vec::with_capacity(monitors.len());
-    let mut frames = HashMap::new();
-    for i in capture_order {
-        let m = &monitors[i];
-        let img = m.capture_image().map_err(|e| {
-            format!(
-                "无法抓取显示器「{}」：{}",
-                m.name().unwrap_or_default(),
-                platform::describe_capture_error(e)
-            )
-        })?;
-        let info = to_info(m, &geoms, i);
-        let (width, height) = img.dimensions();
-        frames.insert(
-            info.id,
-            CapturedFrame {
-                width,
-                height,
-                rgba: Arc::new(img.into_raw()),
-            },
-        );
-        infos.push(info);
-    }
-    Ok((infos, frames, geoms))
+    Ok(CaptureLayout {
+        monitors,
+        infos,
+        geoms,
+        focused_index,
+    })
 }
 
-/// Install a fresh session on the main thread.
-///
-/// Overlay windows are kept hidden and are only shown after their WebView has
-/// painted the frame (`overlay_frame_ready`), which is what prevents the
-/// previous Space's frozen image from flashing on screen.
-fn begin_ui(app: &AppHandle, captured: Result<CapturedFrames, String>) -> Result<(), String> {
-    let (infos, frames, geoms) = match captured {
-        Ok(captured) => captured,
+fn capture_session_in_worker(
+    handle: AppHandle,
+    session_id: u64,
+    started_at_ms: u64,
+    trigger_at: std::time::Instant,
+) {
+    let layout = match capture_layout() {
+        Ok(layout) => layout,
         Err(error) => {
-            platform::permission_hint(app, &error);
-            return Err(error);
+            report_capture_start_failure(&handle, session_id, error);
+            return;
         }
     };
-    if infos.is_empty() {
-        return Err("未检测到可截图的显示器".into());
+
+    let focused_id = layout.infos[layout.focused_index].id;
+    let focused_frame = match capture_monitor(&layout.monitors[layout.focused_index]) {
+        Ok(frame) => frame,
+        Err(error) => {
+            report_capture_start_failure(&handle, session_id, error);
+            return;
+        }
+    };
+    log::info!(
+        "capture session {session_id}: focused monitor {focused_id} grabbed in {} ms",
+        trigger_at.elapsed().as_millis()
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let main_handle = handle.clone();
+    let infos = layout.infos.clone();
+    let geoms = layout.geoms.clone();
+    let posted = handle.run_on_main_thread(move || {
+        let state = main_handle.state::<AppState>();
+        if state.capture_session.load(Ordering::SeqCst) != session_id {
+            let _ = tx.send(Ok(()));
+            return;
+        }
+        let result = begin_session(
+            &main_handle,
+            session_id,
+            started_at_ms,
+            infos,
+            geoms,
+            focused_id,
+            focused_frame,
+        );
+        if let Err(error) = &result {
+            log::error!("capture session failed: {error}");
+            abort_session(&main_handle);
+        }
+        state.capture_lock.store(false, Ordering::SeqCst);
+        let _ = tx.send(result);
+    });
+    if posted.is_err() {
+        release_capture_lock(&handle, session_id);
+        return;
+    }
+    match rx.recv() {
+        Ok(Ok(())) => {}
+        _ => return,
+    }
+    let frame_generation = handle
+        .state::<AppState>()
+        .overlay_generation
+        .load(Ordering::SeqCst);
+    if !wait_for_focus_visible(&handle, session_id, focused_id) {
+        return;
     }
 
-    let started_at_ms = now_ms();
-    // capture_frames puts the monitor under the cursor first.
-    let focused_id = infos.first().map(|monitor| monitor.id);
+    for (index, monitor) in layout.monitors.iter().enumerate() {
+        if index == layout.focused_index || !is_session_active(&handle, session_id) {
+            continue;
+        }
+        let frame = match capture_monitor(monitor) {
+            Ok(frame) => frame,
+            Err(error) => {
+                log::warn!("secondary monitor capture failed: {error}");
+                continue;
+            }
+        };
+        if !is_session_active(&handle, session_id) {
+            return;
+        }
+        let monitor_id = layout.infos[index].id;
+        log::info!(
+            "capture session {session_id}: secondary monitor {monitor_id} grabbed in {} ms",
+            trigger_at.elapsed().as_millis()
+        );
+        let install_handle = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            install_monitor_frame(
+                &install_handle,
+                session_id,
+                frame_generation,
+                monitor_id,
+                frame,
+            );
+        });
+    }
+}
 
-    // Cache the snapshot before touching overlay windows.
+fn is_session_active(app: &AppHandle, session_id: u64) -> bool {
+    app.state::<AppState>()
+        .capture_session
+        .load(Ordering::SeqCst)
+        == session_id
+}
+
+fn wait_for_focus_visible(app: &AppHandle, session_id: u64, focused_id: u32) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while std::time::Instant::now() < deadline {
+        if !is_session_active(app, session_id) {
+            return false;
+        }
+        let visible = app
+            .state::<AppState>()
+            .shown_overlays
+            .lock()
+            .map(|shown| shown.contains(&focused_id))
+            .unwrap_or(false);
+        if visible {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    log::debug!("focused overlay did not report visible before secondary capture");
+    is_session_active(app, session_id)
+}
+
+fn release_capture_lock(app: &AppHandle, session_id: u64) {
+    let state = app.state::<AppState>();
+    if state.capture_session.load(Ordering::SeqCst) == session_id {
+        state.capture_lock.store(false, Ordering::SeqCst);
+    }
+}
+
+fn report_capture_start_failure(app: &AppHandle, session_id: u64, error: String) {
+    let main_handle = app.clone();
+    let posted = app.run_on_main_thread(move || {
+        let state = main_handle.state::<AppState>();
+        if state.capture_session.load(Ordering::SeqCst) != session_id {
+            return;
+        }
+        platform::permission_hint(&main_handle, &error);
+        log::error!("capture session failed: {error}");
+        abort_session(&main_handle);
+        state.capture_lock.store(false, Ordering::SeqCst);
+    });
+    if posted.is_err() {
+        release_capture_lock(app, session_id);
+    }
+}
+
+/// Install the focused monitor's frame and make only that overlay eligible to
+/// display. Secondary monitors are added by `install_monitor_frame`.
+fn begin_session(
+    app: &AppHandle,
+    session_id: u64,
+    started_at_ms: u64,
+    infos: Vec<MonitorInfo>,
+    geoms: Vec<MonitorGeom>,
+    focused_id: u32,
+    focused_frame: CapturedFrame,
+) -> Result<(), String> {
+    let Some(focused_monitor) = infos
+        .iter()
+        .find(|monitor| monitor.id == focused_id)
+        .cloned()
+    else {
+        return Err("找不到光标所在的显示器".into());
+    };
+    let monitor_ids = infos.iter().map(|monitor| monitor.id).collect();
+    let bridge_geoms = geoms.clone();
+
+    prune_overlay_windows(app, &infos);
     {
         let state = app.state::<AppState>();
         let mut pending = state
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        pending.frames_by_id = frames;
-        pending.monitors = infos.clone();
-        pending.geoms = geoms.clone();
+        pending.frames_by_id.clear();
+        pending.frames_by_id.insert(focused_id, focused_frame);
+        pending.monitors = infos;
+        pending.geoms = geoms;
         pending.started_at_ms = started_at_ms;
+        pending.session_id = session_id;
         drop(pending);
         {
             let mut focused = state
                 .focused_monitor
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            *focused = focused_id;
+            *focused = Some(focused_id);
         }
         {
             let mut shown = state
@@ -908,23 +1056,18 @@ fn begin_ui(app: &AppHandle, captured: Result<CapturedFrames, String>) -> Result
         }
     }
 
-    sync_overlay_windows(app, &infos)?;
-
-    // Reuse the prewarmed overlay WebViews and ask them for the new raw frame.
-    for monitor in infos.iter() {
-        let (window, _) = ensure_overlay_window(app, monitor)?;
-        configure_overlay_window(&window, monitor);
-        // Stay hidden until the new frame is painted; see `overlay_frame_ready`.
-        let _ = window.hide();
-        let ready = app
-            .state::<AppState>()
-            .ready_overlays
-            .lock()
-            .map(|ready| ready.contains(&monitor.id))
-            .unwrap_or(false);
-        if ready {
-            let _ = window.emit("overlay-refresh", started_at_ms);
-        }
+    // Only touch the focused overlay on the critical path. Other overlay
+    // windows are prepared when their frames arrive.
+    let (window, _) = ensure_overlay_window(app, &focused_monitor)?;
+    let _ = window.hide();
+    let ready = app
+        .state::<AppState>()
+        .ready_overlays
+        .lock()
+        .map(|ready| ready.contains(&focused_id))
+        .unwrap_or(false);
+    if ready {
+        let _ = window.emit("overlay-refresh", started_at_ms);
     }
 
     let generation = app
@@ -932,13 +1075,162 @@ fn begin_ui(app: &AppHandle, captured: Result<CapturedFrames, String>) -> Result
         .overlay_generation
         .fetch_add(1, Ordering::SeqCst)
         + 1;
-    start_pointer_bridge(app, generation, geoms);
-    start_show_watchdog(
-        app,
-        generation,
-        infos.iter().map(|monitor| monitor.id).collect(),
-    );
+    start_pointer_bridge(app, generation, bridge_geoms);
+    start_show_watchdog(app, generation, session_id, monitor_ids);
     Ok(())
+}
+
+/// Publish a secondary monitor without disturbing the already-visible overlay.
+fn install_monitor_frame(
+    app: &AppHandle,
+    session_id: u64,
+    frame_generation: u64,
+    monitor_id: u32,
+    frame: CapturedFrame,
+) {
+    let state = app.state::<AppState>();
+    if state.overlay_generation.load(Ordering::SeqCst) != frame_generation {
+        return;
+    }
+    let (monitor, started_at_ms) = {
+        let mut pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if pending.session_id != session_id || pending.started_at_ms == 0 {
+            return;
+        }
+        let Some(monitor) = pending
+            .monitors
+            .iter()
+            .find(|monitor| monitor.id == monitor_id)
+            .cloned()
+        else {
+            return;
+        };
+        pending.frames_by_id.insert(monitor_id, frame);
+        (monitor, pending.started_at_ms)
+    };
+
+    let (window, _) = match ensure_overlay_window(app, &monitor) {
+        Ok(window) => window,
+        Err(error) => {
+            log::warn!("failed to prepare overlay for monitor {monitor_id}: {error}");
+            return;
+        }
+    };
+    let already_shown = state
+        .shown_overlays
+        .lock()
+        .map(|shown| shown.contains(&monitor_id))
+        .unwrap_or(false);
+    if !already_shown {
+        let _ = window.hide();
+    }
+    let ready = state
+        .ready_overlays
+        .lock()
+        .map(|ready| ready.contains(&monitor_id))
+        .unwrap_or(false);
+    if ready {
+        let _ = window.emit("overlay-refresh", started_at_ms);
+    }
+    // A monitor captured after the session's initial watchdog ran still needs
+    // its own fallback in case this WebView never reports a painted frame.
+    let generation = state.overlay_generation.load(Ordering::SeqCst);
+    start_show_watchdog(app, generation, session_id, vec![monitor_id]);
+}
+
+#[cfg(target_os = "macos")]
+fn capture_monitor(monitor: &Monitor) -> Result<CapturedFrame, String> {
+    capture_monitor_frame(monitor).map_err(|error| {
+        format!(
+            "无法抓取显示器「{}」：{}",
+            monitor.name().unwrap_or_default(),
+            platform::describe_capture_error(error)
+        )
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_monitor(monitor: &Monitor) -> Result<CapturedFrame, String> {
+    let image = monitor.capture_image().map_err(|error| {
+        format!(
+            "无法抓取显示器「{}」：{}",
+            monitor.name().unwrap_or_default(),
+            platform::describe_capture_error(error)
+        )
+    })?;
+    let (width, height) = image.dimensions();
+    Ok(CapturedFrame {
+        width,
+        height,
+        rgba: Arc::new(image.into_raw()),
+    })
+}
+
+/// Capture directly from CoreGraphics and trim/convert BGRA rows in one pass.
+///
+/// xcap first copies the whole provider into a Vec, then copies the trimmed
+/// rows into another Vec before swapping channels. That doubles the full-frame
+/// memory traffic on the hotkey path; this path copies each visible row once.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn capture_monitor_frame(monitor: &Monitor) -> Result<CapturedFrame, String> {
+    let display_id = monitor.id().map_err(|error| error.to_string())?;
+    let bounds = CGDisplayBounds(display_id);
+    let image = CGWindowListCreateImage(
+        bounds,
+        CGWindowListOption::OptionAll,
+        0,
+        CGWindowImageOption::Default,
+    )
+    .ok_or("CoreGraphics 没有返回截图图像")?;
+    let width = CGImage::width(Some(&image));
+    let height = CGImage::height(Some(&image));
+    if width == 0 || height == 0 {
+        return Err("CoreGraphics 返回了空截图".into());
+    }
+    let provider = CGImage::data_provider(Some(&image)).ok_or("无法读取截图数据")?;
+    let data = CGDataProvider::data(Some(&provider)).ok_or("无法复制截图数据")?;
+    let bytes_per_row = CGImage::bytes_per_row(Some(&image));
+    // SAFETY: `data` owns an immutable snapshot returned by CoreGraphics, and
+    // the copy completes before `data` is released at the end of this function.
+    let source = unsafe { data.as_bytes_unchecked() };
+    let rgba = convert_bgra_rows(source, bytes_per_row, width, height)?;
+    Ok(CapturedFrame {
+        width: width as u32,
+        height: height as u32,
+        rgba: Arc::new(rgba),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn convert_bgra_rows(
+    source: &[u8],
+    bytes_per_row: usize,
+    width: usize,
+    height: usize,
+) -> Result<Vec<u8>, String> {
+    let row_bytes = width.checked_mul(4).ok_or("截图行宽溢出")?;
+    let source_len = bytes_per_row
+        .checked_mul(height)
+        .ok_or("截图缓冲区大小溢出")?;
+    let output_len = row_bytes.checked_mul(height).ok_or("截图输出大小溢出")?;
+    if bytes_per_row < row_bytes || source.len() < source_len {
+        return Err("截图像素缓冲区不完整".into());
+    }
+
+    let mut rgba = Vec::with_capacity(output_len);
+    for row in 0..height {
+        let start = row * bytes_per_row;
+        let destination_start = rgba.len();
+        rgba.extend_from_slice(&source[start..start + row_bytes]);
+        for pixel in rgba[destination_start..].as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+    }
+    Ok(rgba)
 }
 
 /// Return a monitor overlay's CoreGraphics window number.
@@ -1269,6 +1561,7 @@ pub fn commit_execute(
 /// bring the editor forward when needed.
 pub fn commit_finish(app: &AppHandle, outcome: CommitOutcome) -> Result<(), String> {
     let state = app.state::<AppState>();
+    state.capture_session.fetch_add(1, Ordering::SeqCst);
     *state
         .last_shot
         .lock()
@@ -1381,6 +1674,7 @@ fn crop_rgba(
 pub fn cancel(app: &AppHandle) -> Result<(), String> {
     hide_overlays(app);
     let state = app.state::<AppState>();
+    state.capture_session.fetch_add(1, Ordering::SeqCst);
     if state.restore_windows.swap(false, Ordering::SeqCst) {
         set_app_visibility(app, true);
     }
@@ -1526,6 +1820,28 @@ mod tests {
         assert_eq!(&payload[4..8], &1u32.to_le_bytes());
         assert_eq!(&payload[8..], &[1, 2, 3, 4, 5, 6, 7, 8]);
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn converts_padded_bgra_rows_to_rgba_in_one_pass() {
+        let source = [
+            1, 2, 3, 4, 5, 6, 7, 8, 99, 99, 99, 99, // 第一行，含 4 字节行填充
+            9, 10, 11, 12, 13, 14, 15, 16, 99, 99, 99, 99,
+        ];
+        let rgba = convert_bgra_rows(&source, 12, 2, 2).unwrap();
+        assert_eq!(
+            rgba,
+            vec![3, 2, 1, 4, 7, 6, 5, 8, 11, 10, 9, 12, 15, 14, 13, 16]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rejects_incomplete_bgra_rows() {
+        assert!(convert_bgra_rows(&[0; 15], 12, 2, 2).is_err());
+        assert!(convert_bgra_rows(&[0; 16], 4, 2, 2).is_err());
+    }
+
     #[test]
     fn clamps_negative_nan_and_oversized_crops() {
         // Negative origin is pulled back to zero.

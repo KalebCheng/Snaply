@@ -33,8 +33,16 @@ pub fn overlay_frame_ready(app: AppHandle, monitor_id: u32) {
 }
 
 #[tauri::command]
-pub fn overlay_image(app: AppHandle, monitor_id: u32) -> Result<tauri::ipc::Response, String> {
-    crate::overlay::overlay_image(&app, monitor_id).map(tauri::ipc::Response::new)
+pub async fn overlay_image(
+    app: AppHandle,
+    monitor_id: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let payload = tauri::async_runtime::spawn_blocking(move || {
+        crate::overlay::overlay_image(&app, monitor_id)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(tauri::ipc::Response::new(payload))
 }
 
 /// Window hit testing enumerates CoreGraphics/CoreGraphics-equivalent state and

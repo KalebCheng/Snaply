@@ -426,16 +426,25 @@ export function Overlay() {
   useEffect(() => {
     if (!isTauri() || monitorId == null || !image) return;
     let cancelled = false;
-    // Two frames: one for React's commit, one for the compositor.
+    let reported = false;
+    const report = () => {
+      if (cancelled || reported) return;
+      reported = true;
+      void api.overlayFrameReady(monitorId).catch(() => undefined);
+    };
+    // Hidden WKWebViews heavily throttle requestAnimationFrame. The canvas has
+    // already been drawn synchronously by the effect above, so a short timer is
+    // enough to let React commit and avoids waiting for the 1.5s watchdog.
+    const fallback = window.setTimeout(report, 50);
+    let second = 0;
     const first = window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        if (cancelled) return;
-        void api.overlayFrameReady(monitorId).catch(() => undefined);
-      });
+      second = window.requestAnimationFrame(report);
     });
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(first);
+      if (second) window.cancelAnimationFrame(second);
+      window.clearTimeout(fallback);
     };
   }, [image, monitorId]);
 

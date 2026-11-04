@@ -13,6 +13,7 @@ pub struct PendingCapture {
     pub monitors: Vec<MonitorInfo>,
     pub geoms: Vec<MonitorGeom>,
     pub started_at_ms: u64,
+    pub session_id: u64,
 }
 
 #[derive(Clone)]
@@ -29,6 +30,7 @@ impl PendingCapture {
             monitors: Vec::new(),
             geoms: Vec::new(),
             started_at_ms: 0,
+            session_id: 0,
         }
     }
     pub fn clear(&mut self) {
@@ -36,6 +38,7 @@ impl PendingCapture {
         self.monitors.clear();
         self.geoms.clear();
         self.started_at_ms = 0;
+        self.session_id = 0;
     }
 }
 
@@ -52,6 +55,8 @@ pub struct AppState {
     pub last_shot: Mutex<Option<ShotImage>>,
     /// Prevent repeated hotkey presses from stacking overlay sessions.
     pub capture_lock: AtomicBool,
+    /// Invalidates late results from a superseded capture session.
+    pub capture_session: AtomicU64,
     /// Invalidates native pointer pollers when an overlay session closes.
     pub overlay_generation: AtomicU64,
     /// Coalesces repeated active-Space notifications into one recapture.
@@ -94,6 +99,7 @@ impl AppState {
             settings: Mutex::new(Settings::default()),
             last_shot: Mutex::new(None),
             capture_lock: AtomicBool::new(false),
+            capture_session: AtomicU64::new(0),
             overlay_generation: AtomicU64::new(0),
             #[cfg(target_os = "macos")]
             space_change_generation: AtomicU64::new(0),
