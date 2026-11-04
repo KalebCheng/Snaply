@@ -1,17 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for Snaply windows",
+  "description": "Permissions for the long-lived main and settings windows: Tauri core IPC, window chrome controls, global shortcut rebinding, writing images to the clipboard, and the native open dialog. The opener plugin is intentionally NOT granted: every external link goes through the Rust `open_external_url` command, which enforces a host allowlist.",
   "windows": [
     "main",
-    "settings",
-    "overlay-*"
+    "settings"
   ],
   "remote": {
     "urls": [
+      "http://localhost:1420",
       "http://tauri.localhost/*",
-      "https://tauri.localhost/*",
-      "http://localhost:*"
+      "https://tauri.localhost/*"
     ]
   },
   "permissions": [
@@ -23,7 +22,6 @@
     "core:window:allow-set-size",
     "global-shortcut:default",
     "clipboard-manager:allow-write-image",
-    "dialog:allow-open",
-    "opener:default"
+    "dialog:allow-open"
   ]
 }

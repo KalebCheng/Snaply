@@ -1,0 +1,39 @@
+version: 2
+
+# Automated dependency updates. Cargo and npm minor/patch bumps are grouped into
+# a single PR per ecosystem to keep review noise low; major bumps stay separate
+# because they usually need code changes. GitHub Actions are updated one major
+# tag at a time. Action tags could also be pinned to commit SHAs; Dependabot
+# keeps SHA pins up to date when it manages them.
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

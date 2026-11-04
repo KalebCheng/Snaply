@@ -63,8 +63,24 @@ pub struct AppState {
     pub pending: Mutex<PendingCapture>,
     /// Monitor ids whose prewarmed overlay WebView has finished loading.
     pub ready_overlays: Mutex<HashSet<u32>>,
+    /// Monitor ids whose overlay window is currently visible for this session.
+    ///
+    /// Overlay windows stay hidden until the WebView has painted the current
+    /// frame, so the user never sees a stale screenshot from a previous
+    /// session or a previous Space.
+    pub shown_overlays: Mutex<HashSet<u32>>,
+    /// Monitor under the cursor when the session started; it receives focus.
+    pub focused_monitor: Mutex<Option<u32>>,
     /// Path to the most recent editor image for follow-up actions.
     pub last_edit_path: Mutex<Option<String>>,
+    /// Shortcut that is actually registered with the OS; may differ from the
+    /// persisted value when the saved accelerator was already taken.
+    pub registered_shortcut: Mutex<String>,
+    /// Whether the app windows were visible before the capture hid them, so a
+    /// cancelled session can restore exactly the previous state.
+    pub restore_windows: AtomicBool,
+    /// Validated target for the next raw-body `save_image` call.
+    pub pending_save_path: Mutex<Option<std::path::PathBuf>>,
     /// Explicit quit requests bypass the tray application exit guard.
     pub allow_exit: AtomicBool,
     /// Last Dock visibility applied on macOS.
@@ -85,7 +101,12 @@ impl AppState {
             last_space_recapture_ms: AtomicU64::new(0),
             pending: Mutex::new(PendingCapture::new()),
             ready_overlays: Mutex::new(HashSet::new()),
+            shown_overlays: Mutex::new(HashSet::new()),
+            focused_monitor: Mutex::new(None),
             last_edit_path: Mutex::new(None),
+            registered_shortcut: Mutex::new(Settings::default().shortcut),
+            restore_windows: AtomicBool::new(false),
+            pending_save_path: Mutex::new(None),
             allow_exit: AtomicBool::new(false),
             #[cfg(target_os = "macos")]
             // macOS starts as a regular foreground app with a visible Dock icon.

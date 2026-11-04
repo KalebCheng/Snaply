@@ -1,20 +1,42 @@
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::ShortcutState;
 
-use crate::settings;
+const TRAY_ID: &str = "snaply-tray";
 
-pub fn build(app: &AppHandle) -> tauri::Result<()> {
+/// Build the tray menu. Rebuilt whenever the capture shortcut changes so the
+/// accelerator shown next to "capture" is never stale.
+fn tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let shortcut = settings::load(app).shortcut;
+    let shortcut = crate::settings_window::current_shortcut(app);
     let capture = MenuItem::with_id(app, "capture", "截图", true, Some(shortcut.as_str()))?;
     let settings_item = MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
     let quit = MenuItem::with_id(app, "quit", "退出 Snaply", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&capture, &settings_item, &sep, &quit])?;
+    Menu::with_items(app, &[&capture, &settings_item, &sep, &quit])
+}
 
-    let mut builder = TrayIconBuilder::with_id("snaply-tray")
+/// Refresh the accelerator shown in the tray menu after a shortcut rebind.
+pub fn refresh_menu(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    match tray_menu(app) {
+        Ok(menu) => {
+            if let Err(error) = tray.set_menu(Some(menu)) {
+                log::warn!("failed to refresh tray menu: {error}");
+            }
+        }
+        Err(error) => log::warn!("failed to rebuild tray menu: {error}"),
+    }
+}
+
+pub fn build(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let menu = tray_menu(app)?;
+
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("Snaply — 截图")
         .menu(&menu)
         // Left click captures; right click opens the menu.

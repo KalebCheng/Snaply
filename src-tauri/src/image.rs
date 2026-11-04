@@ -1,4 +1,5 @@
 use tauri::ipc::Response;
+use tauri::Manager;
 
 use crate::state::AppState;
 
@@ -8,14 +9,27 @@ pub fn image_info(state: tauri::State<'_, AppState>) -> Option<(u32, u32)> {
     state
         .last_shot
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
-        .map(|s| (s.width, s.height))
+        .map(|shot| (shot.width, shot.height))
 }
 
+/// Raw RGBA payload for the pending editor image.
+///
+/// A full-screen 5K frame is ~56 MB, so the copy happens on a worker thread and
+/// the bytes travel over IPC as a raw body (`Response`), never as a JSON array.
 #[tauri::command]
-pub fn image_rgba(state: tauri::State<'_, AppState>) -> Response {
-    let guard = state.last_shot.lock().unwrap();
-    let bytes = guard.as_ref().map(|s| s.rgba.clone()).unwrap_or_default();
+pub async fn image_rgba(app: tauri::AppHandle) -> Response {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .last_shot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|shot| shot.rgba.clone())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
     Response::new(bytes)
 }

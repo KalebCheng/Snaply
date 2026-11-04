@@ -1,4 +1,3 @@
-use image::RgbaImage;
 use xcap::Monitor;
 #[cfg(not(target_os = "macos"))]
 use xcap::Window;
@@ -35,14 +34,6 @@ pub fn monitor_geoms_for(monitors: &[Monitor]) -> Vec<MonitorGeom> {
         .enumerate()
         .map(|(i, m)| geom(m, i))
         .collect()
-}
-
-pub fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, String> {
-    let mut buf = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut buf);
-    img.write_to(&mut cursor, image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    Ok(buf)
 }
 
 /// Translate low-level capture failures into actionable messages.

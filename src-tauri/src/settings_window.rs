@@ -3,8 +3,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use crate::settings;
 #[cfg(target_os = "macos")]
-use crate::settings::DockVisibility;
-#[cfg(target_os = "macos")]
+use crate::settings::DockVisibility as MacDockVisibility;
 use crate::state::AppState;
 use crate::tray;
 
@@ -57,9 +56,9 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
 pub fn refresh_dock_visibility(app: &AppHandle) -> Result<(), String> {
     let preference = settings::load(app).dock_visibility;
     let visible = match preference {
-        DockVisibility::Hide => false,
-        DockVisibility::Show => true,
-        DockVisibility::FollowWindow => has_visible_app_window(app),
+        MacDockVisibility::Hide => false,
+        MacDockVisibility::Show => true,
+        MacDockVisibility::FollowWindow => has_visible_app_window(app),
     };
     let state = app.state::<AppState>();
     if state.dock_visible.load(std::sync::atomic::Ordering::SeqCst) == visible {
@@ -91,33 +90,77 @@ fn has_visible_app_window(app: &AppHandle) -> bool {
     })
 }
 
-/// Return the currently registered shortcut for settings display.
+/// Return the shortcut that is actually registered with the OS.
+///
+/// The persisted value can differ from the registered one (for example when the
+/// saved accelerator was already taken at startup), and the settings UI must
+/// show what really works instead of a value that was never bound.
 pub fn current_shortcut(app: &AppHandle) -> String {
-    crate::settings::load(app).shortcut
+    app.state::<AppState>()
+        .registered_shortcut
+        .lock()
+        .map(|shortcut| shortcut.clone())
+        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+}
+
+fn set_registered_shortcut(app: &AppHandle, shortcut: &str) {
+    let state = app.state::<AppState>();
+    let mut current = state
+        .registered_shortcut
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *current = shortcut.to_string();
 }
 
 /// Register the saved shortcut during startup.
+///
+/// When the saved accelerator is taken we fall back to the default one and
+/// persist that choice, so the settings window and the tray menu can never show
+/// a shortcut that is not registered.
 pub fn register_on_start(app: &AppHandle) {
-    let shortcut = current_shortcut(app);
-    if let Err(e) = tray::register_shortcut(app, &shortcut) {
-        log::warn!("hotkey '{e}' failed, fallback to default");
-        let _ = tray::register_shortcut(app, crate::settings::DEFAULT_SHORTCUT);
+    let shortcut = crate::settings::load(app).shortcut;
+    match tray::register_shortcut(app, &shortcut) {
+        Ok(()) => set_registered_shortcut(app, &shortcut),
+        Err(error) => {
+            log::warn!("hotkey '{error}' failed, falling back to the default");
+            match tray::register_shortcut(app, crate::settings::DEFAULT_SHORTCUT) {
+                Ok(()) => {
+                    set_registered_shortcut(app, crate::settings::DEFAULT_SHORTCUT);
+                    let mut settings = crate::settings::load(app);
+                    settings.shortcut = crate::settings::DEFAULT_SHORTCUT.into();
+                    if let Err(save_error) = crate::settings::save(app, &settings) {
+                        log::warn!("failed to persist fallback shortcut: {save_error}");
+                    }
+                }
+                Err(fallback_error) => {
+                    log::error!("failed to register any shortcut: {fallback_error}");
+                }
+            }
+        }
     }
 }
 
 /// Rebind the global shortcut and roll back if registration fails.
+///
+/// Idempotent: asking for the shortcut that is already registered succeeds
+/// instead of reporting "already in use", which used to make "restore default"
+/// fail forever after a startup fallback.
 pub fn rebind(app: &AppHandle, shortcut: &str) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let manager = app.global_shortcut();
+    let previous = current_shortcut(app);
+    if shortcut == previous {
+        return Ok(());
+    }
     if manager.is_registered(shortcut) {
         return Err(format!("{shortcut} 已被占用"));
     }
-    let previous = current_shortcut(app);
     let _ = manager.unregister(previous.as_str());
-    if let Err(e) = manager.register(shortcut) {
+    if let Err(error) = manager.register(shortcut) {
         // Roll back so the previous shortcut remains usable.
         let _ = manager.register(previous.as_str());
-        return Err(format!("无法注册 {shortcut}：{e}"));
+        return Err(format!("无法注册 {shortcut}：{error}"));
     }
+    set_registered_shortcut(app, shortcut);
     Ok(())
 }

@@ -4,6 +4,9 @@ import type { ToolId } from "../types";
 type Props = {
   tool: ToolId;
   onTool: (t: ToolId) => void;
+  /** A crop is committed, so it can be cleared again. */
+  hasCrop?: boolean;
+  onResetCrop?: () => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -47,6 +50,15 @@ export function Toolbar(props: Props) {
             {t.icon}
           </button>
         ))}
+        {props.hasCrop && props.onResetCrop && (
+          <button
+            className="ed-tool ed-tool-wide"
+            onClick={props.onResetCrop}
+            title="还原裁剪（或再按一次 X）"
+          >
+            还原
+          </button>
+        )}
       </div>
 
       <span className="ed-divider" />

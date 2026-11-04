@@ -5,8 +5,17 @@ import { api, isTauri } from "../lib/ipc";
 import { decodeOverlayFrame } from "../lib/decode";
 import { composeExport } from "../lib/export";
 import { drawShapeList } from "../lib/render";
-import { normalizeRect, uid } from "../lib/geometry";
-import type { Language, Point, Rect, Shape, TextShape, ToolId, WindowHit } from "../types";
+import { clampToImage, normalizeRect, uid } from "../lib/geometry";
+import type {
+  Language,
+  Point,
+  Rect,
+  Shape,
+  ShotPayload,
+  TextShape,
+  ToolId,
+  WindowHit,
+} from "../types";
 import { Magnifier } from "./Magnifier";
 import { overlayTranslations, type OverlayCopy } from "./i18n";
 import {
@@ -74,7 +83,7 @@ export function Overlay() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [altDown, setAltDown] = useState(false);
-  const [magnifierOn] = useState(true);
+  const [magnifierOn, setMagnifierOn] = useState(true);
 
   const [mode, setMode] = useState<"select" | "edit">("select");
   const [spaceChanging, setSpaceChanging] = useState(false);
@@ -104,8 +113,11 @@ export function Overlay() {
   const presetAtDownRef = useRef<WindowHit | null>(null);
   const commitLockRef = useRef(false);
   const sessionRef = useRef<number | null>(null);
+  /** Bumped whenever the session is torn down; stale decodes must be dropped. */
+  const sessionTokenRef = useRef(0);
   const cursorRef = useRef<Point | null>(cursor);
   cursorRef.current = cursor;
+  const nativeCursorSeenRef = useRef(false);
   const nativePressRef = useRef(false);
   const physicalPressRef = useRef(false);
   const nativeDispatchRef = useRef(false);
@@ -178,21 +190,30 @@ export function Overlay() {
       listen<number>("overlay-refresh", async ({ payload }) => {
         if (sessionRef.current === payload) return;
         sessionRef.current = payload;
+        const token = ++sessionTokenRef.current;
         try {
           resetAll();
           setSpaceChanging(false);
           setError(null);
           void syncSettings().catch(() => undefined);
           const next = await decodeOverlayFrame(await api.overlayImage(monitorId));
+          // A Space switch or a newer session may have landed while decoding.
+          // Showing this frame would flash the previous screen.
+          if (token !== sessionTokenRef.current) {
+            next.close();
+            return;
+          }
           setImage((previous) => {
             previous?.close();
             return next;
           });
-        } catch {
-          /* The capture session may already be closed. */
+        } catch (cause) {
+          // Keep the failure visible instead of leaving an invisible session.
+          if (token === sessionTokenRef.current) setError(String(cause));
         }
       }),
       listen("overlay-reset", () => {
+        sessionTokenRef.current += 1;
         resetAll();
         setError(null);
         setImage((previous) => {
@@ -201,11 +222,17 @@ export function Overlay() {
         });
       }),
       listen("overlay-space-changing", () => {
-        // Keep the current frozen frame dimmed while macOS finishes switching
-        // Spaces; Rust replaces it with a fresh frame after the transition.
+        // Rust hides the overlay as soon as the Space starts changing so the
+        // system animation is the only thing on screen. Drop the frozen frame
+        // here too, so a reused window can never re-show it.
+        sessionTokenRef.current += 1;
         setSpaceChanging(true);
         resetAll();
         setHover(null);
+        setImage((previous) => {
+          previous?.close();
+          return null;
+        });
       }),
     ]).then(async (registered) => {
       if (disposed) {
@@ -312,6 +339,7 @@ export function Overlay() {
         ) {
           return;
         }
+        nativeCursorSeenRef.current = true;
         setCursor({ x: pointer.x, y: pointer.y });
       } catch {
         // 截图会话关闭期间忽略轮询失败。
@@ -327,33 +355,46 @@ export function Overlay() {
     };
   }, [monitorId, viewport.height, viewport.width, win]);
 
-  // Base image
+  // Base image. The canvas must be cleared when the image goes away: overlay
+  // windows are reused between sessions, and a stale frame left here is what
+  // made the previous Space flash on screen during a Space switch.
   useEffect(() => {
     const canvas = baseRef.current;
-    if (!canvas || !image) return;
+    if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(viewport.width * dpr);
-    canvas.height = Math.round(viewport.height * dpr);
+    const wantWidth = Math.max(1, Math.round(viewport.width * dpr));
+    const wantHeight = Math.max(1, Math.round(viewport.height * dpr));
+    // Assigning width/height rebuilds the backing store (~34 MB on Retina), so
+    // only do it when the size actually changed.
+    if (canvas.width !== wantWidth) canvas.width = wantWidth;
+    if (canvas.height !== wantHeight) canvas.height = wantHeight;
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewport.width, viewport.height);
-    ctx.drawImage(image, 0, 0, viewport.width, viewport.height);
+    if (image) ctx.drawImage(image, 0, 0, viewport.width, viewport.height);
   }, [image, viewport]);
 
   // Annotation layer using physical pixel coordinates.
   useEffect(() => {
     const canvas = artRef.current;
-    if (!canvas || !image) return;
+    if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(viewport.width * dpr);
-    canvas.height = Math.round(viewport.height * dpr);
+    const wantWidth = Math.max(1, Math.round(viewport.width * dpr));
+    const wantHeight = Math.max(1, Math.round(viewport.height * dpr));
+    if (canvas.width !== wantWidth) canvas.width = wantWidth;
+    if (canvas.height !== wantHeight) canvas.height = wantHeight;
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    if (!image) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
     const k = image.width / viewport.width;
     // Annotation points use image pixels, while the canvas uses CSS pixels times DPR.
     ctx.setTransform(dpr / k, 0, 0, dpr / k, 0, 0);
@@ -377,6 +418,33 @@ export function Overlay() {
     if (selected) frameShape(ctx, selected, k);
     ctx.restore();
   }, [image, viewport, shapes, draftShape, selectedId, mode, sel, editingTextId]);
+
+  // Tell Rust the new frame is painted so it can reveal the window.
+  //
+  // The overlay stays hidden until this arrives; without the handshake the
+  // window would be shown with the previous session's canvas still on screen.
+  useEffect(() => {
+    if (!isTauri() || monitorId == null || !image) return;
+    let cancelled = false;
+    // Two frames: one for React's commit, one for the compositor.
+    const first = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        void api.overlayFrameReady(monitorId).catch(() => undefined);
+      });
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(first);
+    };
+  }, [image, monitorId]);
+
+  // Safety valve: never leave the overlay stuck in the "space is changing" state.
+  useEffect(() => {
+    if (!spaceChanging) return;
+    const timer = window.setTimeout(() => setSpaceChanging(false), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [spaceChanging]);
 
   // 窗口命中测试
   useEffect(() => {
@@ -453,9 +521,21 @@ export function Overlay() {
     });
   };
 
+  /**
+   * Reset every piece of per-session state.
+   *
+   * Overlay windows are prewarmed and reused for the whole app lifetime, so a
+   * flag that is only cleared on the error path (as `busy` used to be) leaks
+   * into the next capture and silently disables pointer input and the toolbar
+   * on that display. Everything that belongs to a session must be reset here.
+   */
   const resetAll = () => {
+    commitLockRef.current = false;
     nativePressRef.current = false;
+    nativeDispatchRef.current = false;
     physicalPressRef.current = false;
+    presetAtDownRef.current = null;
+    setBusy(false);
     setMode("select");
     setSel(null);
     setShapes([]);
@@ -463,7 +543,6 @@ export function Overlay() {
     setSelectedId(null);
     setTextInput(null);
     setHover(null);
-    presetAtDownRef.current = null;
     setTool("select");
   };
 
@@ -514,6 +593,23 @@ export function Overlay() {
     );
   };
 
+  /**
+   * Hand the finished shot to the main window.
+   *
+   * The main window is created lazily on the first capture, so its `shot-ready`
+   * listener may not exist yet when the commit resolves. Retry a few times; the
+   * payload carries a `shotId` so retries are idempotent on the receiver.
+   */
+  const deliverShot = (payload: Omit<ShotPayload, "action"> & { action: "edit" | "copy" | "save" }) => {
+    let attempt = 0;
+    const send = () => {
+      attempt += 1;
+      void emitTo("main", "shot-ready", payload).catch(() => undefined);
+      if (attempt < 8) window.setTimeout(send, 150);
+    };
+    send();
+  };
+
   /** Finish editing, copy directly, or save through the main window. */
   const commit = (requested: "edit" | "copy" | "save") => {
     // A highlighted window is a valid target for keyboard actions.
@@ -533,19 +629,28 @@ export function Overlay() {
         return;
       }
       const k = image.width / viewport.width;
-      const crop = {
-        x: Math.round(r.x * k),
-        y: Math.round(r.y * k),
-        width: Math.max(1, Math.round(r.width * k)),
-        height: Math.max(1, Math.round(r.height * k)),
-      };
+      const crop = clampToImage(
+        {
+          x: Math.round(r.x * k),
+          y: Math.round(r.y * k),
+          width: Math.max(1, Math.round(r.width * k)),
+          height: Math.max(1, Math.round(r.height * k)),
+        },
+        image.width,
+        image.height,
+      );
       composeExport(image, shapes, crop)
         .then(async ({ bytes }) => {
           await api.copyImage(bytes);
-          // Persist the capture after a successful clipboard write.
-          void api.overlayCommit(monitorId, r, "copy").catch(() => {
-            void api.cancelCapture().catch(() => undefined);
-          });
+          // Persist the annotated capture (Rust already wrote the unannotated
+          // crop during commit, so overwrite it to keep both paths identical).
+          const result = await api.overlayCommit(monitorId, r, "copy");
+          await api.saveImage(bytes).catch(() => undefined);
+          return result;
+        })
+        .then(() => {
+          commitLockRef.current = false;
+          setBusy(false);
         })
         .catch((e) => {
           commitLockRef.current = false;
@@ -560,9 +665,12 @@ export function Overlay() {
     api
       .overlayCommit(monitorId, r, "edit")
       .then((result) => {
-        emitTo("main", "shot-ready", {
+        // Release the session lock: this overlay window is reused for the next
+        // capture, and a stuck lock would disable the toolbar on this display.
+        commitLockRef.current = false;
+        setBusy(false);
+        deliverShot({
           ...result,
-          mode: "edit",
           action,
           // Shift annotation coordinates into the cropped image space.
           shapes: offsetShapes(shapes, -offset.x, -offset.y),
@@ -709,7 +817,10 @@ export function Overlay() {
     if (nativePressRef.current && !nativeDispatchRef.current) return;
     const p = pointOf(e);
     if (!p) return;
-    if (!isTauri()) setCursor(p);
+    // Linux has no global cursor query, so fall back to real pointer events.
+    // On macOS the native source is authoritative (WebKit can emit bogus
+    // coordinates when the overlay gains or loses focus).
+    if (!isTauri() || !nativeCursorSeenRef.current) setCursor(p);
     if (!drag || !image) return;
     if (drag.kind === "new") {
       setDrag({ ...drag, current: p });
@@ -841,6 +952,12 @@ export function Overlay() {
       if (textInput || editingText) return;
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
+      if (!mod && k === "m") {
+        // Documented shortcut: toggle the pixel magnifier.
+        e.preventDefault();
+        setMagnifierOn((previous) => !previous);
+        return;
+      }
       if (mod && k === "z") {
         e.preventDefault();
         setShapes((prev) => prev.slice(0, -1));
@@ -1104,6 +1221,8 @@ export function Overlay() {
           }
           onBlur={commitText}
           onKeyDown={(e) => {
+            // Never treat an IME candidate confirmation as a commit.
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === "Escape") {
               e.stopPropagation();
               setTextInput(null);

@@ -84,9 +84,10 @@ export type CursorLocation = {
 
 /** Payload sent to the editor through the `shot-ready` event. */
 export type ShotPayload = {
+  /** Capture session id; the editor uses it to ignore duplicate deliveries. */
+  shotId: number;
   absolutePath: string;
   fileName: string;
-  png: number[];
   mode: "edit" | "copy";
   action: "edit" | "copy" | "save";
   shapes: Shape[];
@@ -96,9 +97,10 @@ export type ShotPayload = {
 };
 
 export type CreateResult = {
+  /** Capture session id (milliseconds since epoch when the session started). */
+  shotId: number;
   absolutePath: string;
   fileName: string;
-  png: number[];
   mode: "edit" | "copy";
 };
 

@@ -12,7 +12,7 @@ use core::ffi::c_void;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CFType, CGPoint, CGRect, CGSize};
 #[allow(deprecated)]
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
+    CGBitmapContextCreate, CGColorSpace, CGContext, CGDataProvider, CGImage, CGImageAlphaInfo,
     CGImageByteOrderInfo, CGWindowImageOption, CGWindowListCopyWindowInfo, CGWindowListCreateImage,
     CGWindowListOption,
 };
@@ -551,6 +551,48 @@ pub fn clear_content_bounds_cache() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
+}
+
+/// Capture one display's pixels while this app's overlay windows stay visible.
+///
+/// `window_id` is the overlay's `NSWindow.windowNumber`: CoreGraphics then
+/// composites only the windows *below* it, so the dimmed capture UI never ends
+/// up in the frozen frame. This is what lets a Space switch keep the overlay on
+/// screen instead of hiding it for the duration of the capture.
+#[allow(deprecated)]
+pub fn capture_display_excluding_window(
+    bounds: CGRect,
+    window_id: u32,
+) -> Option<image::RgbaImage> {
+    let image = CGWindowListCreateImage(
+        bounds,
+        CGWindowListOption::OptionOnScreenBelowWindow,
+        window_id,
+        CGWindowImageOption::Default,
+    )?;
+
+    let width = CGImage::width(Some(&image));
+    let height = CGImage::height(Some(&image));
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let provider = CGImage::data_provider(Some(&image))?;
+    let data = CGDataProvider::data(Some(&provider))?;
+    let bytes = data.to_vec();
+    let bytes_per_row = CGImage::bytes_per_row(Some(&image));
+    if bytes_per_row < width * 4 {
+        return None;
+    }
+
+    // Match xcap's macOS path exactly: trim the row padding, then BGRA -> RGBA.
+    let mut buffer = Vec::with_capacity(width * height * 4);
+    for row in bytes.chunks_exact(bytes_per_row) {
+        buffer.extend_from_slice(&row[..width * 4]);
+    }
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    image::RgbaImage::from_raw(width as u32, height as u32, buffer)
 }
 
 #[cfg(test)]

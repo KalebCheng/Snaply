@@ -55,6 +55,7 @@ pub fn run() {
             commands::cancel_capture,
             commands::overlay_snapshot,
             commands::overlay_ready,
+            commands::overlay_frame_ready,
             commands::overlay_image,
             commands::cursor_location,
             commands::windows_under_cursor,
@@ -71,6 +72,7 @@ pub fn run() {
             image::image_info,
             image::image_rgba,
             app_info,
+            save_image_target,
             save_image,
             copy_image,
             copy_text,
@@ -157,26 +159,110 @@ pub fn run() {
 fn app_info(app: AppHandle) -> AppInfo {
     AppInfo {
         version: app.package_info().version.to_string(),
-        shortcut: settings::load(&app).shortcut,
+        shortcut: settings_window::current_shortcut(&app),
         screen_permission: platform::has_screen_permission(),
         platform: std::env::consts::OS,
     }
 }
 
+/// Maximum accepted PNG size for clipboard writes (guards against hostile input).
+const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Read a raw binary body from an IPC request.
+fn raw_body<'a>(request: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Ok(bytes.as_slice()),
+        tauri::ipc::InvokeBody::Json(_) => Err("该命令只接受二进制请求体".into()),
+    }
+}
+
+/// Persist the annotated PNG next to the capture it belongs to.
+///
+/// The clipboard/save path used to accept an arbitrary `path` argument, which
+/// was an arbitrary-file-write primitive for anything running in the WebView.
+/// The target is now derived from the capture directory (or the current
+/// capture session), so the renderer can only overwrite its own screenshots.
 #[tauri::command]
-fn save_image(app: AppHandle, path: String, bytes: Vec<u8>) -> Result<(), String> {
-    let target = std::path::PathBuf::from(&path);
+fn save_image(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes = raw_body(&request)?;
+    if bytes.is_empty() {
+        return Err("图片数据为空".into());
+    }
+    let target = resolve_save_target(&app)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
-    *app.state::<AppState>().last_edit_path.lock().unwrap() = Some(path);
+    // Write through a temporary file so a crash cannot truncate an existing capture.
+    let temp = target.with_extension("png.tmp");
+    std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, &target).map_err(|e| e.to_string())?;
+    let saved = target.to_string_lossy().into_owned();
+    *app.state::<AppState>()
+        .last_edit_path
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(saved.clone());
+    Ok(saved)
+}
+
+/// Register the file a following raw-body `save_image` should overwrite.
+///
+/// The raw request body cannot carry a second argument, and the editor may be
+/// saving an older capture than the most recent one, so the target is validated
+/// here and consumed by `save_image`.
+#[tauri::command]
+fn save_image_target(app: AppHandle, path: String) -> Result<(), String> {
+    let dir = settings::capture_dir(&app, &settings::load(&app))?;
+    let target = std::path::PathBuf::from(&path);
+    let is_png = target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"));
+    if target.parent() != Some(dir.as_path()) || !is_png {
+        return Err("只允许写入截图目录中的 PNG 文件".into());
+    }
+    *app.state::<AppState>()
+        .pending_save_path
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(target);
     Ok(())
 }
 
+/// Resolve where `save_image` may write.
+fn resolve_save_target(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let state = app.state::<AppState>();
+    if let Some(pending) = state
+        .pending_save_path
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+    {
+        return Ok(pending);
+    }
+    let dir = settings::capture_dir(app, &settings::load(app))?;
+    let current = state
+        .last_edit_path
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if let Some(current) = current {
+        let candidate = std::path::PathBuf::from(current);
+        if candidate.parent() == Some(dir.as_path())
+            && candidate.extension().is_some_and(|ext| ext == "png")
+        {
+            return Ok(candidate);
+        }
+    }
+    Ok(crate::overlay::unique_capture_path(&dir))
+}
+
+/// Copy an annotated PNG to the clipboard without re-encoding it in the frontend.
 #[tauri::command]
-fn copy_image(app: AppHandle, bytes: Vec<u8>) -> Result<(), String> {
-    let img = ::image::load_from_memory(&bytes)
+fn copy_image(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let bytes = raw_body(&request)?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err("图片太大，无法复制到剪贴板".into());
+    }
+    let img = ::image::load_from_memory(bytes)
         .map_err(|e| format!("无法解析图片：{e}"))?
         .to_rgba8();
     let (width, height) = img.dimensions();
@@ -191,11 +277,25 @@ fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     app.clipboard().write_text(text).map_err(|e| e.to_string())
 }
 
+/// Reveal a capture in the file manager. Only paths inside the capture
+/// directory (or the current session file) are accepted.
 #[tauri::command]
 fn reveal_in_folder(app: AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    let target = std::path::PathBuf::from(&path);
+    let dir = settings::capture_dir(&app, &settings::load(&app))?;
+    let allowed = target.parent() == Some(dir.as_path())
+        || app
+            .state::<AppState>()
+            .last_edit_path
+            .lock()
+            .map(|current| current.as_deref() == Some(path.as_str()))
+            .unwrap_or(false);
+    if !allowed {
+        return Err("只允许在截图目录中定位文件".into());
+    }
     app.opener()
-        .reveal_item_in_dir(std::path::Path::new(&path))
+        .reveal_item_in_dir(&target)
         .map_err(|e| e.to_string())
 }
 

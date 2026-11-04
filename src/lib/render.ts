@@ -88,14 +88,28 @@ export function drawShape(ctx: Ctx, shape: Shape, base?: ImageBitmap, scope?: Re
   }
 }
 
+/** Small scratch surface for the mosaic; `<canvas>` when OffscreenCanvas is missing. */
+function scratchSurface(width: number, height: number): { image: CanvasImageSource; ctx: Ctx } {
+  if (typeof OffscreenCanvas !== "undefined") {
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d");
+    if (ctx) return { image: canvas, ctx };
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("无法创建马赛克画布");
+  return { image: canvas, ctx };
+}
+
 /** Build a mosaic from the original image pixels. */
 export function mosaic(ctx: Ctx, base: ImageBitmap, r: Rect, cell = 12) {
   if (r.width < 1 || r.height < 1) return;
   // Downsample then upscale with nearest-neighbor filtering.
   const tw = Math.max(1, Math.round(r.width / cell));
   const th = Math.max(1, Math.round(r.height / cell));
-  const small = new OffscreenCanvas(tw, th);
-  const sctx = small.getContext("2d")!;
+  const { image: small, ctx: sctx } = scratchSurface(tw, th);
   sctx.imageSmoothingEnabled = true;
   sctx.drawImage(base, r.x, r.y, r.width, r.height, 0, 0, tw, th);
   ctx.save();

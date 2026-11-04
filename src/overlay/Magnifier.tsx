@@ -14,6 +14,18 @@ type Props = {
   copy: OverlayCopy;
 };
 
+/** Shared scratch canvas for the colour probe (one allocation per document). */
+let scratch: CanvasRenderingContext2D | null = null;
+
+function sampleContext(): CanvasRenderingContext2D | null {
+  if (scratch) return scratch;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  scratch = canvas.getContext("2d", { willReadFrequently: true });
+  return scratch;
+}
+
 /**
  * Rectangular pixel inspector with a color readout and screen coordinates.
  */
@@ -59,8 +71,12 @@ export function Magnifier({
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = width * dpr;
-    canvas.height = previewHeight * dpr;
+    const wantWidth = Math.max(1, Math.round(width * dpr));
+    const wantHeight = Math.max(1, Math.round(previewHeight * dpr));
+    // Reassigning width/height rebuilds the backing store on every pointer
+    // move; only do it when the size really changed.
+    if (canvas.width !== wantWidth) canvas.width = wantWidth;
+    if (canvas.height !== wantHeight) canvas.height = wantHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, width, previewHeight);
@@ -68,8 +84,10 @@ export function Magnifier({
     // Sample physical pixels so the preview matches the exported image.
     const scaleX = source.width / viewport.width;
     const scaleY = source.height / viewport.height;
-    const px = point.x * scaleX;
-    const py = point.y * scaleY;
+    // The cursor can sit exactly on the right/bottom edge; keep the sample
+    // inside the bitmap so the colour readout never reports a fake black.
+    const px = clamp(point.x * scaleX, 0, Math.max(0, source.width - 1));
+    const py = clamp(point.y * scaleY, 0, Math.max(0, source.height - 1));
     const sampleWidth = width / zoom;
     const sampleHeight = previewHeight / zoom;
     ctx.drawImage(
@@ -84,15 +102,19 @@ export function Magnifier({
       previewHeight,
     );
 
-    const sample = document.createElement("canvas");
-    sample.width = 1;
-    sample.height = 1;
-    const sampleCtx = sample.getContext("2d");
+    // One shared 1x1 scratch canvas: allocating one per pointer move was the
+    // dominant cost of the overlay's idle loop.
+    const sampleCtx = sampleContext();
     if (!sampleCtx) return;
     sampleCtx.imageSmoothingEnabled = false;
+    sampleCtx.clearRect(0, 0, 1, 1);
     sampleCtx.drawImage(source, px, py, 1, 1, 0, 0, 1, 1);
     const [r, g, b] = sampleCtx.getImageData(0, 0, 1, 1).data;
-    setRgb([r, g, b]);
+    setRgb((previous) =>
+      previous && previous[0] === r && previous[1] === g && previous[2] === b
+        ? previous
+        : [r, g, b],
+    );
   }, [previewHeight, point, source, viewport.height, viewport.width, width, zoom]);
 
   useEffect(() => {

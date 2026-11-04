@@ -5,3 +5,5 @@ dist
 *.tsbuildinfo
 src-tauri/target
 src-tauri/gen/schemas
+target/
+.pnpm-store

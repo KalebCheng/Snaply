@@ -20,7 +20,11 @@ Download the latest installer from [GitHub Releases](https://github.com/KalebChe
 
 > macOS requires Screen Recording permission. Enable Snaply in **System Settings → Privacy & Security → Screen Recording**, then restart the app.
 
-Community builds use ad-hoc signing but are not notarized. On macOS, right-click the app and choose **Open** on first launch. If macOS reports that the app is damaged, clear quarantine after copying it to Applications:
+Community builds use ad-hoc signing (`signingIdentity: "-"`) but are not notarized. On macOS, right-click the app and choose **Open** on first launch.
+
+Ad-hoc signing also means every rebuild produces a different code hash, and macOS ties privacy grants to that hash: **Screen Recording permission is lost after rebuilding or reinstalling Snaply**. Open **System Settings → Privacy & Security → Screen Recording**, remove Snaply from the list, add `/Applications/Snaply.app` again, and restart the app. A properly signed and notarized build does not have this limitation.
+
+If macOS reports that the app is damaged, clear quarantine after copying it to Applications:
 
 ```bash
 sudo xattr -rd com.apple.quarantine /Applications/Snaply.app
@@ -29,13 +33,14 @@ open /Applications/Snaply.app
 
 Windows SmartScreen may also show a warning for community builds.
 
+`minimumSystemVersion` is not set in `tauri.conf.json`, so the bundle inherits Tauri's default (`10.13`). Some features rely on WebKit APIs that shipped later — for example the export path uses `OffscreenCanvas` when available and falls back to a detached `<canvas>` otherwise, and the mosaic effect has the same fallback. Older macOS releases are therefore not part of the tested matrix: expect missing or degraded behavior. Set `bundle.macOS.minimumSystemVersion` explicitly if you need a hard floor.
+
 ## Features
 
 - **One shortcut to capture** — global shortcut, configurable from Settings; Snaply starts silently in the system tray.
 - **Window and region capture** — live window highlighting on macOS, menu bar and desktop fallbacks, precise region selection with resize handles, and a pixel magnifier with a built-in color picker.
 - **In-place annotation** — rectangle, ellipse, arrow, pen, mosaic, text, watermark, and crop. Move, undo, redo, or delete annotations before exporting.
 - **Fast handoff** — copy the annotated result, save it as PNG, or press `Enter` to finish.
-- **Continue from anywhere** — drag an image into the editor or paste an image from the clipboard.
 - **Native updates** — check for the latest GitHub release from the About pane.
 
 ## Keyboard Shortcuts
@@ -43,13 +48,14 @@ Windows SmartScreen may also show a warning for community builds.
 | Action | Shortcut |
 | --- | --- |
 | Start capture | `⌘⇧1` / `Ctrl+Shift+1` |
-| Open settings | `⌘,` / `Ctrl+,` |
+| Open settings | Tray menu → Settings (no global keyboard shortcut is registered) |
 | Copy / save | `⌘C` / `⌘S` (`Ctrl+C` / `Ctrl+S`) |
-| Undo / redo | `⌘Z` / `⇧⌘Z` (`Ctrl+Z` / `Ctrl+Shift+Z`) |
+| Undo / redo | `⌘Z` / `⇧⌘Z` or `⌘Y` (`Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y`) |
+| Fit image to window | `⌘0` / `Ctrl+0` |
 | Select / rectangle / ellipse / arrow | `V` / `R` / `O` / `A` |
 | Pen / mosaic / text / watermark / crop | `P` / `B` / `T` / `W` / `X` |
-| Toggle magnifier | `M` |
-| Copy color under cursor | `⌘C` / `Ctrl+C` in capture mode |
+| Toggle magnifier | `M` (on by default) |
+| Copy color under cursor | `⌘C` / `Ctrl+C` in the magnifier |
 | Switch color format | `Shift` |
 | Zoom / pan canvas | `⌘` + wheel / middle mouse or `Alt` + drag |
 | Cancel | `Esc` or right-click |
@@ -60,7 +66,7 @@ Windows SmartScreen may also show a warning for community builds.
 
 - Node.js 20+
 - pnpm 10+
-- Rust 1.80+
+- Rust 1.90+
 - Platform dependencies from the [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/)
 
 On Ubuntu/Debian, install the Tauri system packages:
@@ -90,6 +96,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
+CI also runs a blocking RustSec advisory check. Run it locally with:
+
+```bash
+cargo install cargo-audit --locked
+cd src-tauri && cargo audit
+```
+
 Build a local installer:
 
 ```bash
@@ -102,19 +115,27 @@ Bundles are written to `src-tauri/target/release/bundle/`.
 
 ```text
 src/
-  overlay/      Capture overlay: selection, window detection, magnifier
-  editor/       Annotation editor and inspector
+  overlay/      Capture overlay: selection and resize handles (selection.ts), window detection, magnifier
+  editor/       Annotation editor, toolbar, and inspector
   settings/     Settings and about windows
-  lib/          IPC, rendering, geometry, and export helpers
+  lib/          IPC, PNG decoding, rendering, geometry, and export helpers
 src-tauri/src/
-  overlay.rs    Frame capture, overlay lifecycle, crop and save
-  platform.rs   Platform-specific permissions, DPI, coordinates, and windows
-  tray.rs       Tray menu and global shortcuts
-  settings.rs   Persistent user settings
-  updates.rs    GitHub release update check
+  lib.rs              App bootstrap, plugin registration, and the IPC command list
+  main.rs             Binary entry point
+  commands.rs         Tauri commands exposed to the frontend
+  overlay.rs          Frame capture, overlay lifecycle, crop, and save
+  image.rs            Pending-capture pixel access and image metadata commands
+  main_window.rs      Main window creation
+  settings_window.rs  Settings window lifecycle and macOS dock behavior
+  macos_windows.rs    macOS window enumeration and non-transparent content bounds
+  platform.rs         Permissions, DPI, cursor, and window hit testing per platform
+  tray.rs             Tray menu and global shortcut handling
+  settings.rs         Persistent user settings
+  updates.rs          GitHub release update check
+  state.rs            Shared application state
 ```
 
-Annotations are stored as objects over an immutable base capture. Undo is a state pop, and export redraws at the original physical resolution. Coordinates are converted explicitly between logical window/selection space and physical screenshot pixels for high-DPI displays.
+Annotations are stored as objects over an immutable base capture, and export redraws at the original physical resolution. Coordinates are converted explicitly between logical window/selection space and physical screenshot pixels for high-DPI displays.
 
 ## Platform Support
 
@@ -125,7 +146,13 @@ Annotations are stored as objects over an immutable base capture. Undo is a stat
 | Global shortcut | Yes | Yes | May be unavailable on Wayland; tray works |
 | Release bundles | `.dmg` (arm64, x64) | NSIS `.exe` (arm64, x64), `.msi` (x64) | `.AppImage`, `.deb`, `.rpm` (arm64, x64) |
 
-Pure Wayland sessions cannot be captured directly due to an `xcap` limitation. Snaply reports a clear error and asks you to use X11 or XWayland.
+## Known Limitations
+
+- **Pure Wayland sessions cannot be captured.** Snaply relies on `xcap`, which needs X11 or XWayland. Instead of failing silently, it reports an error and asks you to switch sessions.
+- **No global cursor position on Linux.** `cursor_position` returns `None` on Linux, so the magnifier and window highlighting cannot follow the system cursor there and only see pointer events that reach the overlay. Treat color picking and window-under-cursor detection as limited on Linux.
+- **Windows with mixed display scaling.** Monitor geometry is reported in physical pixels while window and selection space is logical, and the mapping assumes a single scale factor. On multi-monitor setups where the displays use different scaling factors (for example 150% next to 100%), a selection can be offset or clamped at the screen edge. Single-display and uniform-scaling setups are the tested configuration; if you hit this, please open an issue with your display layout and scaling values.
+- **Community macOS builds lose Screen Recording permission after every rebuild.** Ad-hoc signing changes the code hash, so macOS treats each build as a new app. Re-grant the permission as described in the macOS notes above.
+- **Partial localization.** The language setting applies to the settings window and the capture overlay; the editor and the tray menu are currently Chinese only.
 
 ## Releases
 

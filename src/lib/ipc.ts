@@ -14,6 +14,10 @@ import type {
 /**
  * Thin typed wrappers around Rust commands.
  * Tauri converts camelCase arguments to snake_case automatically.
+ *
+ * Large binary payloads (`save_image`, `copy_image`) are sent as a raw body
+ * (`Uint8Array`) instead of a JSON number array: Tauri forwards raw bodies
+ * without JSON encoding, which removes the 5-10x size and parse overhead.
  */
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
@@ -23,6 +27,10 @@ export const api = {
   overlaySnapshot: (monitorId: number) =>
     invoke<OverlaySnapshot>("overlay_snapshot", { monitorId }),
   overlayReady: (monitorId: number) => invoke<void>("overlay_ready", { monitorId }),
+
+  /** Tell Rust the overlay has painted the new frame and may be shown. */
+  overlayFrameReady: (monitorId: number) =>
+    invoke<void>("overlay_frame_ready", { monitorId }),
 
   /** Monitor screenshot as raw RGBA with an 8-byte width/height header. */
   overlayImage: async (monitorId: number) => {
@@ -44,17 +52,25 @@ export const api = {
       mode,
     }),
 
-  copyImage: (bytes: Uint8Array) => invoke<void>("copy_image", { bytes: Array.from(bytes) }),
+  copyImage: (bytes: Uint8Array) => invoke<void>("copy_image", bytes),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
-  saveImage: (path: string, bytes: Uint8Array) =>
-    invoke<void>("save_image", { path, bytes: Array.from(bytes) }),
+  /**
+   * Persist PNG bytes; returns the written path.
+   *
+   * `path` is optional and only accepted when it points inside the capture
+   * directory (Rust validates it). Without it the current capture is used.
+   */
+  saveImage: async (bytes: Uint8Array, path?: string) => {
+    if (path) await invoke<void>("save_image_target", { path });
+    return invoke<string>("save_image", bytes);
+  },
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
   openFolder: () => invoke<string>("open_folder"),
   quit: () => invoke<void>("quit_app"),
 
   /** Raw RGBA pixels for the pending editor image. */
   imageInfo: () => invoke<[number, number] | null>("image_info"),
-  imageRgba: async () => new Uint8Array(await invoke<number[] | Uint8Array>("image_rgba")),
+  imageRgba: async () => new Uint8Array(await invoke<ArrayBuffer>("image_rgba")),
 
   getSettings: () => invoke<SettingsPayload>("get_settings"),
   saveSettings: (settings: Settings) => invoke<SettingsPayload>("save_settings", { next: settings }),

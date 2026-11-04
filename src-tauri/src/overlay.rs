@@ -270,10 +270,10 @@ pub struct NativePointerEvent {
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateResult {
+    /// Capture session id (milliseconds since epoch when the session started).
+    pub shot_id: u64,
     pub absolute_path: String,
     pub file_name: String,
-    /// Cropped PNG in physical pixels, returned directly to the frontend.
-    pub png: Vec<u8>,
     pub mode: String,
 }
 
@@ -348,9 +348,15 @@ pub(crate) fn monitor_id_from_label(label: &str) -> Option<u32> {
 }
 
 pub fn hide_overlays(app: &AppHandle) {
-    app.state::<AppState>()
-        .overlay_generation
-        .fetch_add(1, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    state.overlay_generation.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut shown = state
+            .shown_overlays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        shown.clear();
+    }
     for (label, window) in app.webview_windows() {
         if label.starts_with(OVERLAY_PREFIX) {
             let _ = window.emit("overlay-reset", ());
@@ -359,19 +365,170 @@ pub fn hide_overlays(app: &AppHandle) {
     }
 }
 
+/// Show one overlay window and focus it when it belongs to the cursor monitor.
+///
+/// Must run on the main thread: it touches `NSWindow` on macOS.
+fn show_overlay(app: &AppHandle, monitor_id: u32) {
+    let Some(window) = app.get_webview_window(&overlay_label(monitor_id)) else {
+        return;
+    };
+    let monitor = app
+        .state::<AppState>()
+        .pending
+        .lock()
+        .map(|pending| {
+            pending
+                .monitors
+                .iter()
+                .find(|m| m.id == monitor_id)
+                .cloned()
+        })
+        .ok()
+        .flatten();
+    if let Some(monitor) = monitor.as_ref() {
+        // Showing the window can resize the native frame again, so re-apply it.
+        configure_overlay_window(&window, monitor);
+    }
+    let _ = window.show();
+    if let Some(monitor) = monitor.as_ref() {
+        configure_overlay_window(&window, monitor);
+    }
+    let state = app.state::<AppState>();
+    let focused = state
+        .focused_monitor
+        .lock()
+        .map(|focused| *focused)
+        .unwrap_or(None);
+    if focused == Some(monitor_id) {
+        // Focus explicitly so pointer and keyboard commands reach the overlay.
+        activate_overlay_window(&window);
+        let _ = window.set_focus();
+    }
+    {
+        let mut shown = state
+            .shown_overlays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        shown.insert(monitor_id);
+    }
+}
+
+/// Called by the overlay WebView once the current frame has been painted.
+///
+/// Overlay windows stay hidden until this arrives, so a Space switch (or a new
+/// capture) can never flash the previous frame on screen.
+pub fn overlay_frame_ready(app: &AppHandle, monitor_id: u32) {
+    let state = app.state::<AppState>();
+    let in_session = state
+        .pending
+        .lock()
+        .map(|pending| pending.frames_by_id.contains_key(&monitor_id))
+        .unwrap_or(false);
+    if !in_session {
+        return;
+    }
+    let already_shown = state
+        .shown_overlays
+        .lock()
+        .map(|shown| shown.contains(&monitor_id))
+        .unwrap_or(false);
+    if already_shown {
+        return;
+    }
+    show_overlay(app, monitor_id);
+}
+
+/// Fall back to showing every overlay if the WebView never reports a frame.
+///
+/// Without this an unexpected frontend error would leave an invisible capture
+/// session running. The timeout is long enough for a full-resolution decode.
+fn start_show_watchdog(app: &AppHandle, generation: u64, monitors: Vec<u32>) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1_500));
+        let state = handle.state::<AppState>();
+        if state.overlay_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let missing: Vec<u32> = {
+            let shown = state
+                .shown_overlays
+                .lock()
+                .map(|shown| shown.clone())
+                .unwrap_or_default();
+            monitors
+                .into_iter()
+                .filter(|id| !shown.contains(id))
+                .collect()
+        };
+        if missing.is_empty() {
+            return;
+        }
+        log::warn!("overlay frames not reported in time; showing overlays anyway: {missing:?}");
+        let show_handle = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            for monitor_id in missing {
+                show_overlay(&show_handle, monitor_id);
+            }
+        });
+    });
+}
+
+/// Abort a session that never became visible (capture/decoding failure).
+fn abort_session(app: &AppHandle) {
+    hide_overlays(app);
+    if app
+        .state::<AppState>()
+        .restore_windows
+        .swap(false, Ordering::SeqCst)
+    {
+        set_app_visibility(app, true);
+    }
+    let state = app.state::<AppState>();
+    {
+        let mut pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.clear();
+    }
+    {
+        let mut focused = state
+            .focused_monitor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *focused = None;
+    }
+}
+
+/// How long to wait for the macOS Space-switch animation before recapturing.
+///
+/// The notification is posted while the transition is still animating, so the
+/// overlay must stay hidden until the new Space is fully on screen. A newer
+/// notification bumps [`AppState::space_change_generation`] and supersedes
+/// any wait that is already running, so the last transition always wins.
+#[cfg(target_os = "macos")]
+const SPACE_SETTLE_MS: u64 = 620;
+
 /// Re-freeze every display after the active macOS Space changes.
 ///
 /// A screenshot overlay belongs to the desktop contents that existed when the
 /// session began. Keeping the old frozen image over a different Space makes
-/// window highlighting and drawing appear out of sync, so restart the capture
-/// once the new Space has settled.
+/// window highlighting and drawing appear out of sync and shows the previous
+/// Space during the transition, so the overlay is hidden immediately and the
+/// capture restarts once the new Space has settled.
 #[cfg(target_os = "macos")]
 pub fn watch_space_changes(app: &AppHandle) {
     let handle = app.clone();
     let center = NSWorkspace::sharedWorkspace().notificationCenter();
     let block = block2::RcBlock::new(move |_notification: NonNull<NSNotification>| {
         let state = handle.state::<AppState>();
-        if state.pending.lock().unwrap().started_at_ms == 0 {
+        let session_active = state
+            .pending
+            .lock()
+            .map(|pending| pending.started_at_ms != 0)
+            .unwrap_or(false);
+        if !session_active {
             return;
         }
         if now_ms().saturating_sub(state.last_space_recapture_ms.load(Ordering::SeqCst)) < 1_200 {
@@ -379,46 +536,46 @@ pub fn watch_space_changes(app: &AppHandle) {
         }
         let generation = state.space_change_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
-        // Keep the dimmed frozen frame visible across the Space transition,
-        // but clear any selection, toolbar, and magnifier state immediately.
-        for window in handle.webview_windows().into_values() {
-            if window.label().starts_with(OVERLAY_PREFIX) {
+        // Immediately put the overlays back into their empty "nothing selected"
+        // state: the frozen frame of the previous Space must not travel with the
+        // animation. The windows stay visible, so the user keeps seeing the
+        // dimmed capture mask on top of the system's Space animation instead of
+        // the overlay disappearing. Bumping the overlay generation also stops
+        // the synthetic pointer bridge for the duration of the transition.
+        state.overlay_generation.fetch_add(1, Ordering::SeqCst);
+        for (label, window) in handle.webview_windows() {
+            if label.starts_with(OVERLAY_PREFIX) {
                 let _ = window.emit("overlay-space-changing", ());
             }
         }
 
         let recapture = handle.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(320));
+            std::thread::sleep(std::time::Duration::from_millis(SPACE_SETTLE_MS));
             let state = recapture.state::<AppState>();
-            if state.space_change_generation.load(Ordering::SeqCst) != generation
-                || state.pending.lock().unwrap().started_at_ms == 0
-            {
+            // A newer Space transition or a cancelled session supersedes this one.
+            if state.space_change_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let still_active = state
+                .pending
+                .lock()
+                .map(|pending| pending.started_at_ms != 0)
+                .unwrap_or(false);
+            if !still_active {
                 return;
             }
             state
                 .last_space_recapture_ms
                 .store(now_ms(), Ordering::SeqCst);
-            let hide_handle = recapture.clone();
+            let recapture_handle = recapture.clone();
+            // Runs on the main thread: it reads `NSWindow.windowNumber`.
             let _ = recapture.run_on_main_thread(move || {
-                hide_overlays(&hide_handle);
-                let capture_handle = hide_handle.clone();
-                std::thread::spawn(move || {
-                    // Let the compositor remove the old overlay before the
-                    // new frame is captured, otherwise selection UI is frozen
-                    // into the screenshot as ghost artifacts.
-                    std::thread::sleep(std::time::Duration::from_millis(160));
-                    let state = capture_handle.state::<AppState>();
-                    if state.space_change_generation.load(Ordering::SeqCst) != generation
-                        || state.pending.lock().unwrap().started_at_ms == 0
-                    {
-                        return;
-                    }
-                    let final_handle = capture_handle.clone();
-                    let _ = capture_handle.run_on_main_thread(move || {
-                        let _ = begin(&final_handle);
-                    });
-                });
+                let state = recapture_handle.state::<AppState>();
+                if state.space_change_generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                recapture_space(&recapture_handle, generation);
             });
         });
     });
@@ -589,18 +746,66 @@ pub fn overlay_ready(app: &AppHandle, monitor_id: u32) {
 }
 
 /// Start a capture session and open one overlay per monitor.
+///
+/// The blocking screen grab runs on a worker thread and the window/AppKit work
+/// is posted back to the main thread, so the hotkey path never freezes the UI
+/// for the duration of a multi-display capture.
+///
+/// Must be called from the main thread (it hides the application windows).
 pub fn begin(app: &AppHandle) -> Result<(), String> {
-    {
-        let state = app.state::<AppState>();
-        if state.capture_lock.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
+    let state = app.state::<AppState>();
+    if state.capture_lock.swap(true, Ordering::SeqCst) {
+        return Ok(());
     }
-    let result = begin_inner(app);
+    #[cfg(target_os = "macos")]
+    {
+        // Cancel any pending Space recapture: this session is the newest one.
+        state.space_change_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    hide_overlays(app);
+    // Remember whether the app windows were on screen so a cancelled session can
+    // restore them without popping the editor open on a normal tray-only capture.
+    let windows_visible = app.webview_windows().iter().any(|(label, window)| {
+        matches!(label.as_str(), "main" | "settings") && window.is_visible().unwrap_or(false)
+    });
     app.state::<AppState>()
-        .capture_lock
-        .store(false, Ordering::SeqCst);
-    result
+        .restore_windows
+        .store(windows_visible, Ordering::SeqCst);
+    // Hide Snaply windows before capturing.
+    set_app_visibility(app, false);
+    #[cfg(target_os = "macos")]
+    crate::macos_windows::clear_content_bounds_cache();
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        // Give the compositor a moment to remove the windows and any previous
+        // overlay before grabbing the screen, otherwise they end up in the shot.
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        // Worker threads need their own autorelease pool on macOS: the capture
+        // path allocates CoreGraphics/Foundation objects.
+        #[cfg(target_os = "macos")]
+        let captured = objc2::rc::autoreleasepool(|_pool| capture_frames());
+        #[cfg(not(target_os = "macos"))]
+        let captured = capture_frames();
+        let main_handle = handle.clone();
+        let posted = handle.run_on_main_thread(move || {
+            let state = main_handle.state::<AppState>();
+            if let Err(error) = begin_ui(&main_handle, captured) {
+                log::error!("capture session failed: {error}");
+                abort_session(&main_handle);
+            }
+            state.capture_lock.store(false, Ordering::SeqCst);
+        });
+        if posted.is_err() {
+            // The app is shutting down; release the lock so a restarted app can capture.
+            handle
+                .state::<AppState>()
+                .capture_lock
+                .store(false, Ordering::SeqCst);
+        }
+    });
+    Ok(())
 }
 
 /// Captured monitor metadata, raw pixels, and geometry.
@@ -654,69 +859,246 @@ fn capture_frames() -> Result<CapturedFrames, String> {
     Ok((infos, frames, geoms))
 }
 
-fn begin_inner(app: &AppHandle) -> Result<(), String> {
-    hide_overlays(app);
-    // Hide Snaply windows before capturing.
-    set_app_visibility(app, false);
-    #[cfg(target_os = "macos")]
-    crate::macos_windows::clear_content_bounds_cache();
-    let started_at_ms = now_ms();
-
-    // Capture frames and monitor geometry.
-    let (infos, frames, geoms) = match capture_frames() {
-        Ok(frames) => frames,
-        Err(e) => {
-            platform::permission_hint(app, &e);
-            set_app_visibility(app, true);
-            return Err(e);
+/// Install a fresh session on the main thread.
+///
+/// Overlay windows are kept hidden and are only shown after their WebView has
+/// painted the frame (`overlay_frame_ready`), which is what prevents the
+/// previous Space's frozen image from flashing on screen.
+fn begin_ui(app: &AppHandle, captured: Result<CapturedFrames, String>) -> Result<(), String> {
+    let (infos, frames, geoms) = match captured {
+        Ok(captured) => captured,
+        Err(error) => {
+            platform::permission_hint(app, &error);
+            return Err(error);
         }
     };
+    if infos.is_empty() {
+        return Err("未检测到可截图的显示器".into());
+    }
 
+    let started_at_ms = now_ms();
     // capture_frames puts the monitor under the cursor first.
     let focused_id = infos.first().map(|monitor| monitor.id);
 
-    // Cache the snapshot before creating overlay windows.
+    // Cache the snapshot before touching overlay windows.
     {
         let state = app.state::<AppState>();
-        let mut pending = state.pending.lock().unwrap();
+        let mut pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         pending.frames_by_id = frames;
         pending.monitors = infos.clone();
         pending.geoms = geoms.clone();
         pending.started_at_ms = started_at_ms;
+        drop(pending);
+        {
+            let mut focused = state
+                .focused_monitor
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *focused = focused_id;
+        }
+        {
+            let mut shown = state
+                .shown_overlays
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            shown.clear();
+        }
     }
 
     sync_overlay_windows(app, &infos)?;
 
-    // Reuse the prewarmed overlay WebViews and request the new raw frame.
-    for m in infos.iter() {
-        let (window, _) = ensure_overlay_window(app, m)?;
-        let should_focus = Some(m.id) == focused_id;
-        let _ = window.show();
-        // 显示窗口和挂载 WebView 都可能再次调整原生窗口尺寸，
-        // 因此显示后需要重新应用最终 frame。
-        configure_overlay_window(&window, m);
+    // Reuse the prewarmed overlay WebViews and ask them for the new raw frame.
+    for monitor in infos.iter() {
+        let (window, _) = ensure_overlay_window(app, monitor)?;
+        configure_overlay_window(&window, monitor);
+        // Stay hidden until the new frame is painted; see `overlay_frame_ready`.
+        let _ = window.hide();
         let ready = app
             .state::<AppState>()
             .ready_overlays
             .lock()
-            .unwrap()
-            .contains(&m.id);
+            .map(|ready| ready.contains(&monitor.id))
+            .unwrap_or(false);
         if ready {
             let _ = window.emit("overlay-refresh", started_at_ms);
         }
-        if should_focus {
-            // Focus explicitly so pointer and keyboard commands reach the overlay.
-            activate_overlay_window(&window);
-            let _ = window.set_focus();
-        }
     }
+
     let generation = app
         .state::<AppState>()
         .overlay_generation
         .fetch_add(1, Ordering::SeqCst)
         + 1;
     start_pointer_bridge(app, generation, geoms);
+    start_show_watchdog(
+        app,
+        generation,
+        infos.iter().map(|monitor| monitor.id).collect(),
+    );
     Ok(())
+}
+
+/// Return a monitor overlay's CoreGraphics window number.
+///
+/// Must run on the main thread (Cocoa window object).
+#[cfg(target_os = "macos")]
+fn overlay_window_number(app: &AppHandle, monitor_id: u32) -> Option<u32> {
+    let window = app.get_webview_window(&overlay_label(monitor_id))?;
+    let pointer = window.ns_window().ok()?;
+    if pointer.is_null() {
+        return None;
+    }
+    // SAFETY: `ns_window()` hands out the live `NSWindow` owned by the WebView,
+    // and the window is guaranteed to outlive this call because we hold the
+    // `WebviewWindow` handle. Reading the window number does not retain it.
+    let ns_window = unsafe { &*(pointer.cast::<NSWindow>()) };
+    u32::try_from(ns_window.windowNumber()).ok()
+}
+
+/// Re-freeze every display after a Space switch without hiding the overlay.
+///
+/// The overlay keeps showing its dimmed "nothing selected" state while the new
+/// Space is captured; because the capture excludes this app's own windows, the
+/// mask is never baked into the frozen frame and there is no visible gap.
+/// Falls back to the hide-and-recapture path when the excluded capture is not
+/// available (e.g. the overlay window is gone).
+#[cfg(target_os = "macos")]
+fn recapture_space(app: &AppHandle, generation: u64) {
+    let state = app.state::<AppState>();
+    let (monitors, geoms) = {
+        let pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (pending.monitors.clone(), pending.geoms.clone())
+    };
+    if monitors.is_empty() {
+        return;
+    }
+
+    let targets: Vec<(u32, u32)> = monitors
+        .iter()
+        .map(|monitor| overlay_window_number(app, monitor.id).map(|number| (monitor.id, number)))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default();
+    if targets.len() != monitors.len() {
+        log::warn!("overlay window ids unavailable; falling back to a hidden recapture");
+        let fallback = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = begin(&fallback);
+        });
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let mut frames = HashMap::with_capacity(targets.len());
+        for (monitor_id, number) in targets {
+            let Some(geom) = geoms.iter().find(|geom| geom.id == monitor_id) else {
+                continue;
+            };
+            let rect = CGRect::new(
+                CGPoint::new(geom.x, geom.y),
+                CGSize::new(geom.width.max(1.0), geom.height.max(1.0)),
+            );
+            let captured = objc2::rc::autoreleasepool(|_pool| {
+                crate::macos_windows::capture_display_excluding_window(rect, number)
+            });
+            let Some(image) = captured else {
+                log::warn!("capture below overlay failed; falling back to a hidden recapture");
+                let fallback = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let _ = begin(&fallback);
+                });
+                return;
+            };
+            let expected_width = (geom.width * geom.scale).round() as u32;
+            let expected_height = (geom.height * geom.scale).round() as u32;
+            if image.width().abs_diff(expected_width) > 2
+                || image.height().abs_diff(expected_height) > 2
+            {
+                log::warn!(
+                    "capture below overlay returned {}x{} (expected {}x{}); falling back",
+                    image.width(),
+                    image.height(),
+                    expected_width,
+                    expected_height
+                );
+                let fallback = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let _ = begin(&fallback);
+                });
+                return;
+            }
+            let (width, height) = image.dimensions();
+            frames.insert(
+                monitor_id,
+                CapturedFrame {
+                    width,
+                    height,
+                    rgba: Arc::new(image.into_raw()),
+                },
+            );
+        }
+        let install_handle = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            install_space_frames(&install_handle, frames, generation);
+        });
+    });
+}
+
+/// Publish freshly captured Space frames while the overlays stay visible.
+#[cfg(target_os = "macos")]
+fn install_space_frames(app: &AppHandle, frames: HashMap<u32, CapturedFrame>, generation: u64) {
+    let state = app.state::<AppState>();
+    if state.space_change_generation.load(Ordering::SeqCst) != generation {
+        return;
+    }
+    let started_at_ms = now_ms();
+    let geoms = {
+        let mut pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // The session was cancelled or replaced while the capture was running.
+        if pending.started_at_ms == 0 || pending.monitors.is_empty() {
+            return;
+        }
+        pending.frames_by_id = frames;
+        pending.started_at_ms = started_at_ms;
+        pending.geoms.clone()
+    };
+
+    for (label, window) in app.webview_windows() {
+        let Some(monitor_id) = monitor_id_from_label(&label) else {
+            continue;
+        };
+        let ready = state
+            .ready_overlays
+            .lock()
+            .map(|ready| ready.contains(&monitor_id))
+            .unwrap_or(false);
+        if ready {
+            let _ = window.emit("overlay-refresh", started_at_ms);
+        }
+    }
+
+    // Switching Spaces can deactivate the app; make the capture surface key
+    // again so pointer and keyboard keep working without hiding anything.
+    if let Some(focused) = state
+        .focused_monitor
+        .lock()
+        .map(|focused| *focused)
+        .unwrap_or(None)
+    {
+        show_overlay(app, focused);
+    }
+
+    let generation = state.overlay_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    start_pointer_bridge(app, generation, geoms);
 }
 
 pub fn overlay_snapshot(app: &AppHandle, monitor_id: u32) -> Result<OverlaySnapshot, String> {
@@ -778,80 +1160,192 @@ pub fn windows_under_cursor(app: &AppHandle, monitor_id: u32, x: f64, y: f64) ->
     })
 }
 
-/// Crop the selected region from the physical frame, save it, and open the editor.
-pub fn commit(
-    app: &AppHandle,
-    monitor_id: u32,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    mode: &str,
-) -> Result<CreateResult, String> {
+/// Everything the CPU-heavy half of a commit needs, captured on the main thread.
+pub struct CommitPlan {
+    pub frame: CapturedFrame,
+    pub scale: f64,
+    pub shot_id: u64,
+    pub dir: std::path::PathBuf,
+    pub copy_only: bool,
+}
+
+/// Snapshot the session state needed to commit, on the main thread.
+///
+/// Resolving the capture directory here keeps path lookups (which may touch
+/// platform APIs) off the blocking worker thread.
+pub fn commit_prepare(app: &AppHandle, monitor_id: u32) -> Result<CommitPlan, String> {
     let state = app.state::<AppState>();
-    let (frame, scale) = {
-        let pending = state.pending.lock().unwrap();
-        let g = pending
+    let (frame, scale, shot_id) = {
+        let pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let geom = pending
             .geoms
             .iter()
-            .find(|g| g.id == monitor_id)
+            .find(|geom| geom.id == monitor_id)
             .ok_or("找不到对应显示器")?;
         let frame = pending
             .frames_by_id
             .get(&monitor_id)
             .cloned()
             .ok_or("截图缓存已失效，请重新截图")?;
-        (frame, g.scale)
+        (frame, geom.scale, pending.started_at_ms)
     };
+    let settings = crate::settings::load(app);
+    let dir = crate::settings::capture_dir(app, &settings)?;
+    Ok(CommitPlan {
+        frame,
+        scale,
+        shot_id,
+        dir,
+        copy_only: settings.copy_after_capture,
+    })
+}
 
-    let sx = ((x.max(0.0) * scale).round() as u32).min(frame.width.saturating_sub(1));
-    let sy = ((y.max(0.0) * scale).round() as u32).min(frame.height.saturating_sub(1));
-    let sw = ((w.max(1.0) * scale).round() as u32)
-        .min(frame.width.saturating_sub(sx))
-        .max(1);
-    let sh = ((h.max(1.0) * scale).round() as u32)
-        .min(frame.height.saturating_sub(sy))
-        .max(1);
+/// Result of the CPU-heavy half of a commit.
+pub struct CommitOutcome {
+    pub result: CreateResult,
+    pub shot: crate::state::ShotImage,
+    /// Resolved file path, used by `save_image` later on.
+    pub path: String,
+    /// True when the result should not bring the editor forward.
+    pub copy_only: bool,
+}
+
+/// Crop the selected region, encode the PNG, and write it to disk.
+///
+/// Runs on a blocking worker thread: this is the expensive part of a commit.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_execute(
+    plan: &CommitPlan,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    mode: &str,
+) -> Result<CommitOutcome, String> {
+    let frame = &plan.frame;
+    let (sx, sy, sw, sh) = clamp_crop(x, y, w, h, plan.scale, frame.width, frame.height);
     let crop = image::RgbaImage::from_raw(
         sw,
         sh,
         crop_rgba(&frame.rgba, frame.width, frame.height, sx, sy, sw, sh)?,
     )
     .ok_or("无法裁切截图")?;
-    let png = platform::encode_png(&crop)?;
 
-    let settings = crate::settings::load(app);
-    let dir = crate::settings::capture_dir(app, &settings)?;
-    let file_name = format!("Snaply-{}.png", timestamp());
-    let path = dir.join(&file_name);
+    let dir = &plan.dir;
+    let path = unique_capture_path(dir);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("Snaply-{}.png", timestamp()));
     crop.save(&path).map_err(|e| e.to_string())?;
 
-    // Cache RGBA so the frontend can draw without another decode.
-    {
-        let (width, height) = crop.dimensions();
-        *state.last_shot.lock().unwrap() = Some(crate::state::ShotImage {
+    let (width, height) = crop.dimensions();
+    let copy_only = mode == "copy" || plan.copy_only;
+    Ok(CommitOutcome {
+        shot: crate::state::ShotImage {
             width,
             height,
             rgba: crop.into_raw(),
-        });
-    }
+        },
+        path: path.to_string_lossy().into_owned(),
+        result: CreateResult {
+            shot_id: plan.shot_id,
+            absolute_path: path.to_string_lossy().into_owned(),
+            file_name,
+            mode: if copy_only {
+                "copy".into()
+            } else {
+                "edit".into()
+            },
+        },
+        copy_only,
+    })
+}
+
+/// Finish a commit on the main thread: publish the shot, close the overlay, and
+/// bring the editor forward when needed.
+pub fn commit_finish(app: &AppHandle, outcome: CommitOutcome) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    *state
+        .last_shot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome.shot);
+    *state
+        .last_edit_path
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome.path.clone());
 
     hide_overlays(app);
-    state.pending.lock().unwrap().clear();
+    state.restore_windows.store(false, Ordering::SeqCst);
+    {
+        let mut pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.clear();
+    }
+    {
+        let mut focused = state
+            .focused_monitor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *focused = None;
+    }
     // Copy mode stays in the background; edit mode brings the main window forward.
-    if !(mode == "copy" || settings.copy_after_capture) {
+    if !outcome.copy_only {
         show_main_window(app)?;
     }
-    Ok(CreateResult {
-        absolute_path: path.to_string_lossy().into_owned(),
-        file_name,
-        png,
-        mode: if mode == "copy" || settings.copy_after_capture {
-            "copy".into()
-        } else {
-            "edit".into()
-        },
-    })
+    Ok(())
+}
+
+/// Clamp a logical selection to physical pixel bounds.
+///
+/// Exposed for unit tests: negative/NaN/oversized selections must never produce
+/// an out-of-bounds crop.
+fn clamp_crop(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    scale: f64,
+    width: u32,
+    height: u32,
+) -> (u32, u32, u32, u32) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let sx = ((x.max(0.0) * scale).round() as u32).min(width.saturating_sub(1));
+    let sy = ((y.max(0.0) * scale).round() as u32).min(height.saturating_sub(1));
+    let sw = ((w.max(1.0) * scale).round() as u32)
+        .min(width.saturating_sub(sx))
+        .max(1);
+    let sh = ((h.max(1.0) * scale).round() as u32)
+        .min(height.saturating_sub(sy))
+        .max(1);
+    (sx, sy, sw, sh)
+}
+
+/// Build a file path that does not clobber an existing capture.
+///
+/// Two captures within the same second used to overwrite each other silently.
+pub fn unique_capture_path(dir: &std::path::Path) -> std::path::PathBuf {
+    let stamp = timestamp();
+    let candidate = dir.join(format!("Snaply-{stamp}.png"));
+    if !candidate.exists() {
+        return candidate;
+    }
+    for index in 1..1_000u32 {
+        let candidate = dir.join(format!("Snaply-{stamp}-{index}.png"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("Snaply-{stamp}-{}.png", now_ms()))
 }
 
 fn crop_rgba(
@@ -867,10 +1361,9 @@ fn crop_rgba(
         || y >= image_height
         || width == 0
         || height == 0
-        || x.checked_add(width)
-            .map_or(true, |right| right > image_width)
+        || x.checked_add(width).is_none_or(|right| right > image_width)
         || y.checked_add(height)
-            .map_or(true, |bottom| bottom > image_height)
+            .is_none_or(|bottom| bottom > image_height)
     {
         return Err("截图裁切区域超出图像边界".into());
     }
@@ -887,7 +1380,24 @@ fn crop_rgba(
 
 pub fn cancel(app: &AppHandle) -> Result<(), String> {
     hide_overlays(app);
-    app.state::<AppState>().pending.lock().unwrap().clear();
+    let state = app.state::<AppState>();
+    if state.restore_windows.swap(false, Ordering::SeqCst) {
+        set_app_visibility(app, true);
+    }
+    {
+        let mut pending = state
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.clear();
+    }
+    {
+        let mut focused = state
+            .focused_monitor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *focused = None;
+    }
     Ok(())
 }
 
@@ -1015,5 +1525,45 @@ mod tests {
         assert_eq!(&payload[..4], &2u32.to_le_bytes());
         assert_eq!(&payload[4..8], &1u32.to_le_bytes());
         assert_eq!(&payload[8..], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+    #[test]
+    fn clamps_negative_nan_and_oversized_crops() {
+        // Negative origin is pulled back to zero.
+        assert_eq!(
+            clamp_crop(-10.0, -5.0, 20.0, 20.0, 2.0, 100, 100),
+            (0, 0, 40, 40)
+        );
+        // Huge origin/selection never exceeds the frame.
+        assert_eq!(
+            clamp_crop(1e9, 1e9, 1e9, 1e9, 2.0, 100, 100),
+            (99, 99, 1, 1)
+        );
+        // NaN is treated as zero and a zero selection still produces one pixel.
+        assert_eq!(
+            clamp_crop(f64::NAN, f64::NAN, 1.0, 1.0, 2.0, 100, 100),
+            (0, 0, 2, 2)
+        );
+        // Full selection maps to the whole frame.
+        assert_eq!(
+            clamp_crop(0.0, 0.0, 1000.0, 1000.0, 1.0, 100, 100),
+            (0, 0, 100, 100)
+        );
+        // A bogus scale factor must not produce a zero-sized crop.
+        assert_eq!(
+            clamp_crop(0.0, 0.0, 10.0, 10.0, 0.0, 100, 100),
+            (0, 0, 10, 10)
+        );
+    }
+
+    #[test]
+    fn unique_capture_path_never_reuses_a_name() {
+        let dir = std::env::temp_dir().join(format!("snaply-audit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = unique_capture_path(&dir);
+        std::fs::write(&first, b"x").unwrap();
+        let second = unique_capture_path(&dir);
+        assert_ne!(first, second, "second capture must not overwrite the first");
+        assert_eq!(second.parent(), Some(dir.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

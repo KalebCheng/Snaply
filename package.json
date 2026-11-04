@@ -1,7 +1,7 @@
 {
   "name": "snaply",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Fast cross-platform screenshot and annotation app",
   "license": "MIT",
   "repository": "https://github.com/KalebCheng/Snaply",
@@ -10,7 +10,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",
@@ -26,6 +27,8 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "~5.8.3",
-    "vite": "^6.3.5"
-  }
+    "vite": "^6.3.5",
+    "vitest": "^5.1.0"
+  },
+  "packageManager": "pnpm@10.27.0"
 }

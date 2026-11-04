@@ -13,6 +13,12 @@ concurrency:
 permissions:
   contents: read
 
+# Supply chain: third-party actions are referenced by floating major tags for
+# readability. Each one can be pinned to a full 40-character commit SHA (for
+# example `uses: actions/checkout@<sha> # v7`) to protect against a retagged or
+# compromised release. `dtolnay/rust-toolchain@stable` is a branch by design and
+# only selects a stable toolchain.
+
 jobs:
   frontend:
     name: Build frontend
@@ -35,6 +41,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Run frontend unit tests
+        run: pnpm test
 
       - name: Build frontend
         run: pnpm build
@@ -109,3 +118,29 @@ jobs:
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test --all-targets
+
+  audit:
+    name: Audit Rust dependencies
+    runs-on: ubuntu-24.04
+
+    # RustSec advisory check for the Rust dependency graph (npm is covered by
+    # Dependabot alerts). This job is intentionally blocking: a new advisory
+    # should be triaged and either fixed by bumping the dependency or ignored
+    # with an explicit, justified entry in `.cargo/audit.toml` so the reason is
+    # captured in review. If an upstream advisory has no fix and no workaround,
+    # unblock the branch temporarily with `continue-on-error: true` on this job
+    # and open a tracking issue that links the advisory. Note that `stable` here
+    # means "latest stable Rust" and is safe: the audit only reads Cargo.lock.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit
+        working-directory: src-tauri
+        run: cargo audit

@@ -281,6 +281,45 @@ body,
 }
 
 /* Property panel */
+/* Right-hand column: the inspector and the watermark card are stacked so the two
+   never share the same clickable area. */
+.ed-side {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: 228px;
+  max-height: calc(100% - 132px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  z-index: 5;
+}
+
+.ed-side::-webkit-scrollbar {
+  display: none;
+}
+
+.ed-side > .ed-inspector {
+  position: static;
+  right: auto;
+  top: auto;
+  transform: none;
+  width: auto;
+  animation: side-in 260ms var(--ease-spring);
+}
+
+@keyframes side-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+
 .ed-inspector {
   position: absolute;
   right: 16px;
@@ -298,6 +337,11 @@ body,
   -webkit-backdrop-filter: blur(28px) saturate(1.8);
   animation: insp-in 260ms var(--ease-spring);
   z-index: 5;
+}
+
+/* Watermark controls live in the same column, below the inspector. */
+.ed-watermark {
+  flex: 0 0 auto;
 }
 
 @keyframes insp-in {
@@ -474,6 +518,14 @@ body,
   color: var(--accent-fg);
   background: var(--accent);
   margin-left: 4px;
+}
+
+/* Text button used for the "还原" crop reset. */
+.ed-tool-wide {
+  width: auto;
+  padding: 0 9px;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
 }
 
 .ed-tool.is-confirm:hover {

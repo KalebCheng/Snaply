@@ -16,7 +16,16 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
+
+# Least privilege: the workflow default is read-only. Only the jobs that modify
+# a GitHub release opt into `contents: write` below.
+#
+# Supply chain: third-party actions are referenced by floating major tags for
+# readability. Each one can be pinned to a full 40-character commit SHA (for
+# example `uses: actions/checkout@<sha> # v7`) to protect against a retagged or
+# compromised release. `dtolnay/rust-toolchain@stable` is a branch by design and
+# only selects a stable toolchain.
 
 jobs:
   validate:
@@ -94,6 +103,8 @@ jobs:
     name: Create draft release
     needs: validate
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
 
     steps:
       - name: Create or reuse draft release
@@ -168,6 +179,11 @@ jobs:
     name: Build ${{ matrix.name }}
     needs: [validate, create-release, frontend]
     runs-on: ${{ matrix.os }}
+    # tauri-action uploads each installer to the draft release, so the build
+    # jobs need write access to release assets even though the rest of the
+    # workflow is read-only.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -274,6 +290,8 @@ jobs:
     name: Publish release
     needs: [validate, build]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
 
     steps:
       - name: Check out repository

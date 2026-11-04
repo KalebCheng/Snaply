@@ -47,6 +47,27 @@ export function clampRect(r: Rect, width: number, height: number): Rect {
   };
 }
 
+/**
+ * Clamp a crop rectangle to the physical image bounds.
+ *
+ * The overlay derives the crop from a logical selection, so rounding can push
+ * the rectangle one pixel past the edge. `drawImage` would silently clip and
+ * rescale in that case, producing a stretched export.
+ */
+export function clampToImage(rect: Rect, width: number, height: number): Rect {
+  const safe = (value: number) => (Number.isFinite(value) ? Math.round(value) : 0);
+  const imageWidth = Math.max(1, Math.round(width));
+  const imageHeight = Math.max(1, Math.round(height));
+  const x = Math.min(Math.max(safe(rect.x), 0), imageWidth - 1);
+  const y = Math.min(Math.max(safe(rect.y), 0), imageHeight - 1);
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.min(safe(rect.width), imageWidth - x)),
+    height: Math.max(1, Math.min(safe(rect.height), imageHeight - y)),
+  };
+}
+
 export function rectContains(r: Rect, p: Point, pad = 0) {
   return (
     p.x >= r.x - pad && p.y >= r.y - pad && p.x <= r.x + r.width + pad && p.y <= r.y + r.height + pad

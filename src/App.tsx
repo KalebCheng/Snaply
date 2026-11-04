@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
-import { Overlay } from "./overlay/Overlay";
+import { useEffect, useRef, useState } from "react";
 import { Editor } from "./editor/Editor";
 import { api, isTauri } from "./lib/ipc";
-import { bitmapFromRgba, decodePng } from "./lib/decode";
+import { bitmapFromRgba } from "./lib/decode";
 import { composeExport } from "./lib/export";
 import type { ShotPayload } from "./types";
 import "./styles/idle.css";
@@ -17,62 +16,83 @@ type Editing = {
   fontSize: number;
 };
 
-/** Main window entry. Overlay and settings use independent HTML entries. */
+/** Main window entry. */
 export function App() {
-  if (location.pathname.endsWith("/overlay.html")) return <Overlay />;
   return <MainWindow />;
 }
 
 /** The hidden main window that presents the editor after a capture. */
 function MainWindow() {
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const lastShotRef = useRef(0);
 
   // Handle overlay confirmation for edit, copy, or save.
   useEffect(() => {
     if (!isTauri()) return;
-    let stop = false;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen<ShotPayload>("shot-ready", async ({ payload }) => {
-        try {
-          // Use the cached cropped RGBA pixels when available.
-          const info = await api.imageInfo();
-          const img = info
-            ? await bitmapFromRgba(await api.imageRgba(), info[0], info[1])
-            : await decodePng(new Uint8Array(payload.png));
 
-          if (payload.action === "copy" || payload.action === "save") {
-            // Compose annotations when needed; otherwise reuse the backend PNG.
-            const bytes =
-              payload.shapes.length === 0 && payload.action === "copy"
-                ? new Uint8Array(payload.png)
-                : (await composeExport(img, payload.shapes)).bytes;
-            if (payload.action === "save") {
-              await api.saveImage(payload.absolutePath, bytes);
-            } else {
-              await api.copyImage(bytes);
-            }
-            await api.hideMain();
-            return;
-          }
+    const handle = async (payload: ShotPayload) => {
+      // `shot-ready` is retried by the overlay until this window exists; ignore
+      // duplicate deliveries of the same capture session.
+      if (payload.shotId && payload.shotId === lastShotRef.current) return;
+      if (payload.shotId) lastShotRef.current = payload.shotId;
+      setError(null);
 
-          if (!stop)
-            setEditing({
-              image: img,
-              path: payload.absolutePath,
-              key: Date.now(),
-              shapes: payload.shapes,
-              color: payload.color,
-              strokeWidth: payload.strokeWidth,
-              fontSize: payload.fontSize,
-            });
-        } catch {
-          /* The capture session may already be closed. */
+      const info = await api.imageInfo();
+      if (!info) {
+        throw new Error("截图数据已失效，请重新截图");
+      }
+      const image = await bitmapFromRgba(await api.imageRgba(), info[0], info[1]);
+
+      if (payload.action === "copy" || payload.action === "save") {
+        // Re-render at physical resolution: the file on disk holds the raw crop.
+        const { bytes } = await composeExport(image, payload.shapes);
+        if (payload.action === "save") {
+          await api.saveImage(bytes, payload.absolutePath);
+        } else {
+          await api.copyImage(bytes);
         }
-      }).then((f) => (unlisten = f));
-    });
+        await api.hideMain();
+        image.close();
+        return;
+      }
+
+      if (disposed) {
+        image.close();
+        return;
+      }
+      setEditing({
+        image,
+        path: payload.absolutePath,
+        key: Date.now(),
+        shapes: payload.shapes,
+        color: payload.color,
+        strokeWidth: payload.strokeWidth,
+        fontSize: payload.fontSize,
+      });
+    };
+
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<ShotPayload>("shot-ready", ({ payload }) => {
+          void handle(payload).catch((cause) => {
+            // Surface the failure instead of silently dropping a capture.
+            console.error("shot-ready failed", cause);
+            setError(String(cause));
+            void api.hideMain().catch(() => undefined);
+          });
+        }),
+      )
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((cause) => console.error("failed to subscribe to shot-ready", cause));
+
     return () => {
-      stop = true;
+      disposed = true;
       unlisten?.();
     };
   }, []);
@@ -100,7 +120,7 @@ function MainWindow() {
     <div className="app-idle" data-tauri-drag-region>
       <div className="app-idle-card">
         <span className="app-idle-dot" />
-        Snaply 正在托盘运行 · 按快捷键或点托盘图标截图
+        {error ?? "Snaply 正在托盘运行 · 按快捷键或点托盘图标截图"}
       </div>
     </div>
   );

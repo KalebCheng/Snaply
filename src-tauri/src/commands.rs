@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Manager};
 
 use crate::overlay::{CreateResult, CursorLocation, OverlaySnapshot};
-use crate::platform::{MonitorGeom, WindowHit};
+use crate::platform::WindowHit;
 use crate::settings::{self, Settings};
 use crate::settings_window;
 use crate::state::AppState;
@@ -26,23 +26,39 @@ pub fn overlay_ready(app: AppHandle, monitor_id: u32) {
     crate::overlay::overlay_ready(&app, monitor_id);
 }
 
+/// Show the overlay once its WebView has painted the current frame.
+#[tauri::command]
+pub fn overlay_frame_ready(app: AppHandle, monitor_id: u32) {
+    crate::overlay::overlay_frame_ready(&app, monitor_id);
+}
+
 #[tauri::command]
 pub fn overlay_image(app: AppHandle, monitor_id: u32) -> Result<tauri::ipc::Response, String> {
     crate::overlay::overlay_image(&app, monitor_id).map(tauri::ipc::Response::new)
 }
 
+/// Window hit testing enumerates CoreGraphics/CoreGraphics-equivalent state and
+/// must not run on the UI thread: it is polled while the user hovers the overlay.
 #[tauri::command]
-pub fn windows_under_cursor(app: AppHandle, monitor_id: u32, x: f64, y: f64) -> Vec<WindowHit> {
+pub async fn windows_under_cursor(
+    app: AppHandle,
+    monitor_id: u32,
+    x: f64,
+    y: f64,
+) -> Vec<WindowHit> {
     crate::overlay::windows_under_cursor(&app, monitor_id, x, y)
 }
 
+/// Polled ~60 times per second by every overlay; keep it off the UI thread.
 #[tauri::command]
-pub fn cursor_location(app: AppHandle) -> Option<CursorLocation> {
+pub async fn cursor_location(app: AppHandle) -> Option<CursorLocation> {
     crate::overlay::cursor_location(&app)
 }
 
+/// Crop, encode, and persist the selection without blocking the UI thread.
 #[tauri::command]
-pub fn overlay_commit(
+#[allow(clippy::too_many_arguments)]
+pub async fn overlay_commit(
     app: AppHandle,
     monitor_id: u32,
     x: f64,
@@ -52,19 +68,28 @@ pub fn overlay_commit(
     mode: Option<String>,
 ) -> Result<CreateResult, String> {
     let mode = mode.unwrap_or_else(|| "edit".into());
-    let result = crate::overlay::commit(&app, monitor_id, x, y, width, height, &mode)?;
-    *app.state::<AppState>().last_edit_path.lock().unwrap() = Some(result.absolute_path.clone());
-    Ok(result)
-}
+    let plan = crate::overlay::commit_prepare(&app, monitor_id)?;
 
-#[tauri::command]
-pub fn _monitor_geoms(app: AppHandle) -> Vec<MonitorGeom> {
-    app.state::<AppState>()
-        .pending
-        .lock()
-        .unwrap()
-        .geoms
-        .clone()
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        crate::overlay::commit_execute(&plan, x, y, width, height, &mode)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+
+    // Closing the overlay and opening the editor touch AppKit: hop to the main thread.
+    let result = outcome.result.clone();
+    let (tx, mut rx) = tauri::async_runtime::channel::<Result<(), String>>(1);
+    let finish_handle = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = tx.try_send(crate::overlay::commit_finish(&finish_handle, outcome));
+    })
+    .map_err(|error| error.to_string())?;
+
+    match rx.recv().await {
+        Some(Ok(())) => Ok(result),
+        Some(Err(error)) => Err(error),
+        None => Err("截图提交没有返回结果".into()),
+    }
 }
 
 // Settings
@@ -99,10 +124,15 @@ pub fn save_settings(app: AppHandle, next: Settings) -> Result<SettingsPayload, 
     let previous = settings::load(&app);
     let dock_visibility_changed = previous.dock_visibility != next.dock_visibility;
     settings::save(&app, &next)?;
-    *app.state::<AppState>().settings.lock().unwrap() = next;
+    *app.state::<AppState>()
+        .settings
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
     if dock_visibility_changed {
         settings_window::refresh_dock_visibility(&app)?;
     }
+    // The tray menu shows the accelerator of the capture shortcut; rebuild it.
+    crate::tray::refresh_menu(&app);
     Ok(get_settings(app))
 }
 
@@ -148,19 +178,32 @@ pub fn open_screen_permission_settings(app: AppHandle) {
     crate::platform::open_permission_settings(&app);
 }
 
+/// Open a link in the system browser, restricted to this project's pages.
 #[tauri::command]
 pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
 
-    let allowed = url == "https://github.com/KalebCheng"
-        || url.starts_with("https://github.com/KalebCheng/Snaply");
-    if !allowed {
+    if !is_allowed_external_url(&url) {
         return Err("Blocked external URL".into());
     }
 
     app.opener()
         .open_url(url, None::<String>)
         .map_err(|error| error.to_string())
+}
+
+/// Only https URLs on github.com for the Snaply repository (or the maintainer
+/// profile) may be opened. Parsing the URL prevents prefix tricks such as
+/// `https://github.com/KalebCheng/Snaply-evil`.
+fn is_allowed_external_url(raw: &str) -> bool {
+    let Ok(parsed) = tauri::Url::parse(raw) else {
+        return false;
+    };
+    if parsed.scheme() != "https" || parsed.host_str() != Some("github.com") {
+        return false;
+    }
+    let path = parsed.path();
+    path == "/KalebCheng" || path == "/KalebCheng/Snaply" || path.starts_with("/KalebCheng/Snaply/")
 }
 
 #[cfg(test)]
@@ -196,9 +239,34 @@ mod tests {
             effective_shortcut: settings::DEFAULT_SHORTCUT.into(),
         };
         let json = serde_json::to_string(&payload).unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert!(json.contains(r#""settings":{"#));
-        assert!(json.contains(r#""language":"en""#));
-        assert!(json.contains(r#""dockVisibility":"hide""#));
+        assert_eq!(decoded["settings"]["language"], "en");
+        assert_eq!(decoded["settings"]["dockVisibility"], "hide");
+        assert_eq!(decoded["effectiveShortcut"], settings::DEFAULT_SHORTCUT);
+    }
+
+    #[test]
+    fn external_urls_are_restricted_to_the_project() {
+        assert!(is_allowed_external_url("https://github.com/KalebCheng"));
+        assert!(is_allowed_external_url(
+            "https://github.com/KalebCheng/Snaply"
+        ));
+        assert!(is_allowed_external_url(
+            "https://github.com/KalebCheng/Snaply/releases/latest"
+        ));
+        // Prefix tricks and foreign hosts must not pass.
+        assert!(!is_allowed_external_url(
+            "https://github.com/KalebCheng/Snaply-evil"
+        ));
+        assert!(!is_allowed_external_url(
+            "https://evil.com/KalebCheng/Snaply"
+        ));
+        assert!(!is_allowed_external_url(
+            "http://github.com/KalebCheng/Snaply"
+        ));
+        assert!(!is_allowed_external_url("file:///etc/passwd"));
+        assert!(!is_allowed_external_url("javascript:alert(1)"));
+        assert!(!is_allowed_external_url(""));
     }
 }

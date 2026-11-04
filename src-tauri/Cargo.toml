@@ -1,12 +1,12 @@
 [package]
 name = "snaply"
-version = "0.1.8"
+version = "0.1.9"
 description = "Snaply - cross-platform screenshot & annotation tool"
 authors = ["Snaply"]
 license = "MIT"
 repository = "https://github.com/KalebCheng/Snaply"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.90"
 
 [lib]
 name = "snaply_lib"
@@ -36,7 +36,7 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSResponder", "NSRunningApplication", "NSWindow", "NSWorkspace"] }
 objc2-core-foundation = { version = "0.3.2", features = ["CFArray", "CFData", "CFDictionary", "CFNumber", "CFString"] }
-objc2-core-graphics = { version = "0.3.2", features = ["CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGWindow"] }
+objc2-core-graphics = { version = "0.3.2", features = ["CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
