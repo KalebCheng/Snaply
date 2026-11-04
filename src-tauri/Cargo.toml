@@ -40,7 +40,7 @@ objc2-core-graphics = { version = "0.3.2", features = ["CGColorSpace", "CGContex
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
 [profile.release]
 codegen-units = 1
